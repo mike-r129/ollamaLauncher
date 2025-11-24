@@ -1,0 +1,10 @@
+# Windows
+Thumbs.db
+*.exe
+*.dll
+*.log
+
+# IDE
+.vscode/
+*.swp
+*.swo
