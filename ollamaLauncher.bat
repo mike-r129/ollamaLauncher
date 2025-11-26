@@ -1,7 +1,7 @@
 @echo off
 REM ollamaLauncher.bat
 REM Version: 1.1 
-REM Date: 11/24/2025
+REM Date: 11/25/2025
 REM Author: Mike
 REM ============================================================================
 REM ollamaLauncher - Interactive CLI for Managing and Running Ollama Models
@@ -69,7 +69,7 @@ echo         @@        @@@@@@@@        @@    / __ \/ / /___ _____ ___  ____ _/ /
 echo         @@                        @@   / / / / / / __ `/ __ `__ \/ __ `/ /   / __ `/ / / / __ \/ ___/ __ \/ _ \/ ___/
 echo         @@                        @@  / /_/ / / / /_/ / / / / / / /_/ / /___/ /_/ / /_/ / / / / /__/ / / /  __/ /    
 echo         @@@                      @@@  \____/_/_/\__,_/_/ /_/ /_/\__,_/_____/\__,_/\__,_/_/ /_/\___/_/ /_/\___/_/ 
-echo                                                                                               v1.1 by Mike 11/24/2025
+echo                                                                                               v1.1 by Mike 11/25/2025
 REM Check if Ollama is installed and accessible
 where ollama >nul 2>nul
 if %errorlevel% neq 0 (
@@ -556,6 +556,7 @@ if exist "%~dp0fetch_models.ps1" (
     if exist "%FETCH_MODELS_SCRIPT%" (
         del "%~dp0fetch_models.ps1"
         echo Moved fetch_models.ps1 to AppData and cleaned up local file.
+        timeout /t 2 /nobreak >nul
     )
 )
 
