@@ -1,6 +1,6 @@
 @echo off
 REM ollamaLauncher.bat
-REM Version: 1.1 
+REM Version: 1.2 
 REM Date: 11/25/2025
 REM Author: Mike
 REM ============================================================================
@@ -30,6 +30,7 @@ REM     - If Ollama is not installed CLI will download it using curl then the in
 REM     - Once Ollama is installed re-launch the script ollamaLauncher.bat
 REM ============================================================================
 setlocal enabledelayedexpansion
+set "OLLAMA_STARTED=0"
 
 REM Use system temp directory for models cache to avoid desktop clutter
 set "MODELS_CACHE=%TEMP%\ollama-models.txt"
@@ -69,7 +70,7 @@ echo         @@        @@@@@@@@        @@    / __ \/ / /___ _____ ___  ____ _/ /
 echo         @@                        @@   / / / / / / __ `/ __ `__ \/ __ `/ /   / __ `/ / / / __ \/ ___/ __ \/ _ \/ ___/
 echo         @@                        @@  / /_/ / / / /_/ / / / / / / /_/ / /___/ /_/ / /_/ / / / / /__/ / / /  __/ /    
 echo         @@@                      @@@  \____/_/_/\__,_/_/ /_/ /_/\__,_/_____/\__,_/\__,_/_/ /_/\___/_/ /_/\___/_/ 
-echo                                                                                               v1.1 by Mike 11/25/2025
+echo                                                                                               v1.2 by Mike 11/25/2025
 REM Check if Ollama is installed and accessible
 where ollama >nul 2>nul
 if %errorlevel% neq 0 (
@@ -90,7 +91,7 @@ if %errorlevel% neq 0 (
             echo You can manually download from: https://ollama.com/download
             echo.
             pause
-            exit /b
+            goto cleanup
         )
         echo.
         echo Download complete. Opening installer...
@@ -105,8 +106,24 @@ if %errorlevel% neq 0 (
     ) else (
         echo Please ensure Ollama is installed and added to your PATH.
         pause
-        exit /b
+        goto cleanup
     )
+)
+
+REM Check if Ollama is running and start if needed
+tasklist /FI "IMAGENAME eq ollama.exe" 2>nul | find /I "ollama.exe" >nul
+if !errorlevel! neq 0 (
+    echo.
+    echo Starting Ollama server...
+    start "" /B ollama serve >nul 2>&1
+    set "OLLAMA_STARTED=1"
+    
+    echo Waiting for Ollama to be ready...
+    :wait_ollama
+    timeout /t 1 /nobreak >nul
+    curl -s http://localhost:11434 >nul 2>&1
+    if !errorlevel! neq 0 goto wait_ollama
+    echo Ollama is ready.
 )
 
 REM Query and store all installed Ollama models
@@ -131,7 +148,7 @@ if %errorlevel% neq 0 (
         echo.
         echo Exiting. Run 'ollama pull model:tag' to install a model, then try again.
         pause
-        exit /b
+        goto cleanup
     )
 )
 
@@ -152,8 +169,8 @@ set /p choice="Enter the number or model name for the model you want to use (r t
 REM Strip trailing period if present
 if "%choice:~-1%"=="." set "choice=%choice:~0,-1%"
 
-if /i "%choice%"=="x" exit /b
-if /i "%choice%"=="exit" exit /b
+if /i "%choice%"=="x" goto cleanup
+if /i "%choice%"=="exit" goto cleanup
 if /i "%choice%"=="R" goto remove_model
 if /i "%choice%"=="u" goto fetch_list
 if "%choice%"=="" goto invalid
@@ -382,12 +399,12 @@ if /i "!model_input!"=="r" goto handle_refresh
 if /i "!model_input!"=="s" goto handle_sort_size
 if /i "!model_input!"=="d" goto handle_sort_default
 if /i "!model_input!"=="x" (
-    exit /b
+    goto cleanup
 )
 if /i "!model_input!"=="c" (
     cls
     if !count! equ 0 (
-        exit /b
+        goto cleanup
     ) else (
         goto start
     )
@@ -566,6 +583,14 @@ if not exist "%FETCH_MODELS_SCRIPT%" (
     echo Please download 'fetch_models.ps1' and place it in the same folder as this script.
     echo.
     pause
-    exit
+    goto cleanup
+)
+exit /b
+
+:cleanup
+if "!OLLAMA_STARTED!"=="1" (
+    echo.
+    echo Stopping Ollama server...
+    taskkill /F /IM ollama.exe >nul 2>&1
 )
 exit /b
