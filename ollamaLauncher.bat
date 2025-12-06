@@ -365,13 +365,8 @@ REM Calculate total pages needed for pagination
 set /a total_pages=(remote_count + items_per_page - 1) / items_per_page
 
 :show_models_page
-echo.
-if !count! equ 0 (
-    echo No models found locally. Please select a model to download.
-) else (
-    echo Select a model to download from the Ollama library.
-)
-echo.
+echo Using cached model list, enter [R] to re-pull and refresh.
+if !count! equ 0 (echo No models found locally. Please select a model to download.) else (echo Select a model to download from the Ollama library.)
 set "sort_info=Default"
 if "!SORT_MODE!"=="SIZE" (
     if "!SORT_DESC!"=="1" (set "sort_info=Size (Desc)") else (set "sort_info=Size (Asc)")
@@ -379,10 +374,7 @@ if "!SORT_MODE!"=="SIZE" (
 echo Showing Models (Page !page!/!total_pages!) - Sorted by: !sort_info!
 echo.
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$p=!page!; $l=!items_per_page!; $f='%MODELS_SORTED%'; $lf='%LOCAL_MODELS_LIST%'; $s=($p-1)*$l; $installed=@{}; if(Test-Path $lf){Get-Content $lf -Encoding UTF8 | ForEach-Object {$installed[$_]=$true}}; try{$w=$Host.UI.RawUI.WindowSize.Width}catch{$w=80}; if($w -lt 60){$w=60}; $dw=$w-53; if($dw -lt 5){$dw=5}; Write-Host ('{0,-4} {1,-25} {2,-10} {3,-8}  {4}' -f 'Num','Model Name','Size (GB)','Params','Description'); Write-Host ('{0,-4} {1,-25} {2,-10} {3,-8}  {4}' -f ('-'*4),('-'*25),('-'*10),('-'*8),('-'*$dw)); $k=0; Import-Csv $f -Delimiter '|' -Header 'Name','Size','Params','Description' -Encoding UTF8 | Select-Object -Skip $s -First $l | ForEach-Object { $k++; $i=$s+$k; $n=$_.Name; if($n.Length -gt 25){$n=$n.Substring(0,22)+'...'}; $d=$_.Description; if($installed.ContainsKey($_.Name)){$d='   [Installed]    '+$d}; if($d.Length -gt $dw){$d=$d.Substring(0,$dw-3)+'...'}; Write-Host ('{0,3}. {1,-25} {2,-10} {3,-8}  {4}' -f $i,$n,$_.Size,$_.Params,$d) }"
-
-echo.
-echo For descriptions and the full list, visit https://ollama.com/library
-echo.
+echo (Page !page!/!total_pages!) - Sorted by: !sort_info!
 REM Show navigation options based on current page position
 set "nav_line="
 if !page! gtr 1 set "nav_line=[P] Previous    "
