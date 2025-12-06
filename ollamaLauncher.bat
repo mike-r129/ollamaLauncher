@@ -636,10 +636,13 @@ exit /b
 :apply_sort
 REM Sort the cache file based on current mode and save to sorted file
 REM Always start from the original cache to avoid corrupting it with search results
-if "%SORT_MODE%"=="DEFAULT" if "%SEARCH_TERM%"=="" (
+set "CURRENT_SORT=!SORT_MODE!"
+if not "!SEARCH_TERM!"=="" set "CURRENT_SORT=DEFAULT"
+
+if "!CURRENT_SORT!"=="DEFAULT" if "!SEARCH_TERM!"=="" (
     copy /Y "%MODELS_CACHE%" "%MODELS_SORTED%" >nul
 ) else (
-    powershell -NoProfile -Command "$s='%MODELS_CACHE%'; $d='%MODELS_SORTED%'; $m='%SORT_MODE%'; $desc=('%SORT_DESC%' -eq '1'); $q=$env:SEARCH_TERM; $data=Import-Csv $s -Delimiter '|' -Header 'Name','Size','Params','Description' -Encoding UTF8; if($q){$data=$data | Where-Object {$_.Name -like '*'+$q+'*'}}; if($m -eq 'SIZE'){$data=$data | Sort-Object -Property @{Expression={if($_.Size -match '([\d\.]+) GB'){[double]$matches[1]}elseif($_.Size -match '< 1 GB'){0.1}else{-1}}} -Descending:$desc}; $output=@($data | ForEach-Object { $_.Name+'|'+$_.Size+'|'+$_.Params+'|'+$_.Description }); if($output.Count -gt 0){[System.IO.File]::WriteAllLines($d, $output)}else{Set-Content -Path $d -Value '' -Encoding UTF8}"
+    powershell -NoProfile -Command "$s='%MODELS_CACHE%'; $d='%MODELS_SORTED%'; $m='!CURRENT_SORT!'; $desc=('!SORT_DESC!' -eq '1'); $q=$env:SEARCH_TERM; $data=Import-Csv $s -Delimiter '|' -Header 'Name','Size','Params','Description' -Encoding UTF8; if($q){$data=$data | Where-Object {$_.Name -like '*'+$q+'*'}}; if($m -eq 'SIZE'){$data=$data | Sort-Object -Property @{Expression={if($_.Size -match '([\d\.]+) GB'){[double]$matches[1]}elseif($_.Size -match '< 1 GB'){0.1}else{-1}}} -Descending:$desc}; $output=@($data | ForEach-Object { $_.Name+'|'+$_.Size+'|'+$_.Params+'|'+$_.Description }); if($output.Count -gt 0){[System.IO.File]::WriteAllLines($d, $output)}else{Set-Content -Path $d -Value '' -Encoding UTF8}"
 )
 call :load_models
 exit /b
