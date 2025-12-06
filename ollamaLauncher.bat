@@ -361,31 +361,49 @@ call :apply_sort
 
 set "page=1"
 set "items_per_page=50"
-REM Calculate total pages needed for pagination
-set /a total_pages=(remote_count + items_per_page - 1) / items_per_page
 
 :show_models_page
+REM Calculate total pages needed for pagination
+set /a total_pages=(remote_count + items_per_page - 1) / items_per_page
+if !total_pages! lss 1 set "total_pages=1"
+
 echo Using cached model list, enter [R] to re-pull and refresh.
 if !count! equ 0 (echo No models found locally. Please select a model to download.) else (echo Select a model to download from the Ollama library.)
-set "sort_info=Default"
-if "!SORT_MODE!"=="SIZE" (
-    if "!SORT_DESC!"=="1" (set "sort_info=Size (Desc)") else (set "sort_info=Size (Asc)")
+
+if not "!SEARCH_TERM!"=="" (
+    echo Showing Models (Page !page!/!total_pages!^) - Search Results: !SEARCH_TERM!
+) else (
+    set "sort_info=Default"
+    if "!SORT_MODE!"=="SIZE" (
+        if "!SORT_DESC!"=="1" (set "sort_info=Size (Desc)") else (set "sort_info=Size (Asc)")
+    )
+    echo Showing Models (Page !page!/!total_pages!^) - Sorted by: !sort_info!
 )
-echo Showing Models (Page !page!/!total_pages!) - Sorted by: !sort_info!
 echo.
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$p=!page!; $l=!items_per_page!; $f='%MODELS_SORTED%'; $lf='%LOCAL_MODELS_LIST%'; $s=($p-1)*$l; $installed=@{}; if(Test-Path $lf){Get-Content $lf -Encoding UTF8 | ForEach-Object {$installed[$_]=$true}}; try{$w=$Host.UI.RawUI.WindowSize.Width}catch{$w=80}; if($w -lt 60){$w=60}; $dw=$w-53; if($dw -lt 5){$dw=5}; Write-Host ('{0,-4} {1,-25} {2,-10} {3,-8}  {4}' -f 'Num','Model Name','Size (GB)','Params','Description'); Write-Host ('{0,-4} {1,-25} {2,-10} {3,-8}  {4}' -f ('-'*4),('-'*25),('-'*10),('-'*8),('-'*$dw)); $k=0; Import-Csv $f -Delimiter '|' -Header 'Name','Size','Params','Description' -Encoding UTF8 | Select-Object -Skip $s -First $l | ForEach-Object { $k++; $i=$s+$k; $n=$_.Name; if($n.Length -gt 25){$n=$n.Substring(0,22)+'...'}; $d=$_.Description; if($installed.ContainsKey($_.Name)){$d='   [Installed]    '+$d}; if($d.Length -gt $dw){$d=$d.Substring(0,$dw-3)+'...'}; Write-Host ('{0,3}. {1,-25} {2,-10} {3,-8}  {4}' -f $i,$n,$_.Size,$_.Params,$d) }"
 
 echo.
-echo (Page !page!/!total_pages!) - Sorted by: !sort_info!
-echo.
-REM Show navigation options based on current page position
-set "nav_line="
-if !page! gtr 1 set "nav_line=[P] Previous    "
-if !page! lss !total_pages! set "nav_line=!nav_line![N] Next Page   "
-set "nav_line=!nav_line![R] Refresh List"
+if not "!SEARCH_TERM!"=="" (
+    echo (Page !page!/!total_pages!^) - Search Results: !SEARCH_TERM!
+    echo.
+    set "nav_line="
+    if !page! gtr 1 set "nav_line=[P] Previous    "
+    if !page! lss !total_pages! set "nav_line=!nav_line![N] Next Page   "
+    set "nav_line=!nav_line![R] Refresh List"
+    echo !nav_line!
+    echo [C] Cancel [X] Exit
+) else (
+    echo (Page !page!/!total_pages!^) - Sorted by: !sort_info!
+    echo.
+    REM Show navigation options based on current page position
+    set "nav_line="
+    if !page! gtr 1 set "nav_line=[P] Previous    "
+    if !page! lss !total_pages! set "nav_line=!nav_line![N] Next Page   "
+    set "nav_line=!nav_line![R] Refresh List"
 
-echo !nav_line!
-echo [F] Find Model  [S] Sort Size  [D] Default Sort  [C] Cancel  [X] Exit
+    echo !nav_line!
+    echo [F] Find Model  [S] Sort Size  [D] Default Sort  [C] Cancel  [X] Exit
+)
 set /p model_input="Enter model number or name to pull: "
 
 REM Handle pagination navigation commands
@@ -399,6 +417,12 @@ if /i "!model_input!"=="x" (
     goto cleanup
 )
 if /i "!model_input!"=="c" (
+    if not "!SEARCH_TERM!"=="" (
+        set "SEARCH_TERM="
+        set "page=1"
+        call :apply_sort
+        goto show_models_page
+    )
     cls
     if !count! equ 0 (
         goto cleanup
@@ -417,10 +441,21 @@ goto handle_selection
 
 :handle_search
 echo.
+set "query="
 set /p query="Enter search term: "
-set "SEARCH_TERM=%query%"
+if "!query!"=="" goto show_models_page
+
+set "SEARCH_TERM=!query!"
 set "page=1"
 call :apply_sort
+
+if !remote_count! equ 0 (
+    echo.
+    echo No results found for "!query!".
+    timeout /t 2 /nobreak >nul
+    set "SEARCH_TERM="
+    call :apply_sort
+)
 goto show_models_page
 
 :handle_sort_size
@@ -567,7 +602,7 @@ REM Sort the cache file based on current mode and save to sorted file
 if "%SORT_MODE%"=="DEFAULT" if "%SEARCH_TERM%"=="" (
     copy /Y "%MODELS_CACHE%" "%MODELS_SORTED%" >nul
 ) else (
-    powershell -NoProfile -Command "$s='%MODELS_CACHE%'; $d='%MODELS_SORTED%'; $m='%SORT_MODE%'; $desc=('%SORT_DESC%' -eq '1'); $q=$env:SEARCH_TERM; $data=Import-Csv $s -Delimiter '|' -Header 'Name','Size','Params','Description' -Encoding UTF8; if($q){$data=$data | Where-Object {$_.Name -like '*'+$q+'*'}}; if($m -eq 'SIZE'){$data=$data | Sort-Object -Property @{Expression={if($_.Size -match '([\d\.]+) GB'){[double]$matches[1]}elseif($_.Size -match '< 1 GB'){0.1}else{-1}}} -Descending:$desc}; [System.IO.File]::WriteAllLines($d, ($data | ForEach-Object { $_.Name+'|'+$_.Size+'|'+$_.Params+'|'+$_.Description }))"
+    powershell -NoProfile -Command "$s='%MODELS_CACHE%'; $d='%MODELS_SORTED%'; $m='%SORT_MODE%'; $desc=('%SORT_DESC%' -eq '1'); $q=$env:SEARCH_TERM; $data=Import-Csv $s -Delimiter '|' -Header 'Name','Size','Params','Description' -Encoding UTF8; if($q){$data=$data | Where-Object {$_.Name -like '*'+$q+'*'}}; if($m -eq 'SIZE'){$data=$data | Sort-Object -Property @{Expression={if($_.Size -match '([\d\.]+) GB'){[double]$matches[1]}elseif($_.Size -match '< 1 GB'){0.1}else{-1}}} -Descending:$desc}; [System.IO.File]::WriteAllLines($d, @($data | ForEach-Object { $_.Name+'|'+$_.Size+'|'+$_.Params+'|'+$_.Description }))"
 )
 call :load_models
 exit /b
