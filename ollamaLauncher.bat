@@ -160,7 +160,7 @@ for /f "usebackq delims=" %%a in ("%LOCAL_MODELS_LIST%") do (
 )
 
 echo. 
-echo [0/U] Update/Pull a new Model    [R] Remove a model   [X] Exit
+echo [0/U] Update/Pull a new Model    [R] Remove a model   [L] Exit CLI ^& Start Ollama.exe   [X] Exit
 echo.
 :prompt
 set "choice="
@@ -172,6 +172,7 @@ if "%choice:~-1%"=="." set "choice=%choice:~0,-1%"
 if /i "%choice%"=="x" goto cleanup
 if /i "%choice%"=="exit" goto cleanup
 if /i "%choice%"=="R" goto remove_model
+if /i "%choice%"=="L" goto launch_ollama
 if /i "%choice%"=="u" goto fetch_list
 if "%choice%"=="" goto invalid
 
@@ -247,6 +248,41 @@ echo Session ended.
 pause
 cls
 goto start
+
+:launch_ollama
+echo.
+echo Launching Ollama...
+
+if exist "%LOCALAPPDATA%\Programs\Ollama\Ollama app.exe" (
+    REM If we started the internal server, stop it so the Tray App can take over
+    if "!OLLAMA_STARTED!"=="1" (
+        taskkill /F /IM ollama.exe >nul 2>&1
+        set "OLLAMA_STARTED=0"
+    )
+    start "" "%LOCALAPPDATA%\Programs\Ollama\Ollama app.exe"
+    
+    echo Waiting for Ollama window to appear...
+    timeout /t 1 /nobreak >nul
+    
+    REM Close the Ollama chat window but keep the tray icon running
+    powershell -NoProfile -Command "$proc = Get-Process | Where-Object {$_.MainWindowTitle -eq 'Ollama'}; if($proc) { $proc.CloseMainWindow() }"
+    
+    echo Ollama is now running in the system tray.
+    timeout /t 1 /nobreak >nul
+) else (
+    REM No Tray App found.
+    if "!OLLAMA_STARTED!"=="1" (
+        REM We are running a hidden server. Switch to minimized window.
+        taskkill /F /IM ollama.exe >nul 2>&1
+        start "" /MIN ollama serve
+        set "OLLAMA_STARTED=0"
+    ) else (
+        REM Already running externally.
+        echo Ollama is already running externally.
+        timeout /t 2 /nobreak >nul
+    )
+)
+goto cleanup
 
 :remove_model
 echo.
@@ -402,7 +438,7 @@ if not "!SEARCH_TERM!"=="" (
     set "nav_line=!nav_line![R] Refresh List"
 
     echo !nav_line!
-    echo [F] Find Model  [S] Sort Size  [D] Default Sort  [C] Cancel  [X] Exit
+    echo [F] Find Model  [S] Sort Size   [D] Default Sort  [C] Cancel  [X] Exit
 )
 set /p model_input="Enter model number or name to pull: "
 
