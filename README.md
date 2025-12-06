@@ -92,7 +92,7 @@ Enter model number or name to pull:
 
 ## File Checksums (MD5)
 - **fetch_models.ps1**: `4991AC4BCA941C6A57BAFF9B632A2D4C`
-- **ollamaLauncher.bat**: `30FB7CC739D7424646F99784D1A2238F`
+- **ollamaLauncher.bat**: `C4C2550B76C03E8A847ABF985C7B7785`
 
 ## Author
 Mike

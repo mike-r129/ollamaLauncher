@@ -369,7 +369,7 @@ if !total_pages! lss 1 set "total_pages=1"
 
 echo Using cached model list, enter [R] to re-pull and refresh.
 if !count! equ 0 (echo No models found locally. Please select a model to download.) else (echo Select a model to download from the Ollama library.)
-
+echo.
 if not "!SEARCH_TERM!"=="" (
     echo Showing Models (Page !page!/!total_pages!^) - Search Results: !SEARCH_TERM!
 ) else (
