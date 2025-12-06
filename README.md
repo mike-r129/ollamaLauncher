@@ -12,6 +12,7 @@ CLI tool for [Ollama](https://ollama.ai) on Windows.
 - **Interactive Model Management**:
   - **List & Launch**: View installed models with details (Size, Params) and launch them instantly.
   - **Fetch & Download**: Browse the top 100+ models from the [Ollama Library](https://ollama.com/library) directly within the CLI.
+  - **Search / re-order Models**: Search or order models listed.
   - **Remove Models**: Easily delete installed models to free up space.
 - **Smart Caching**: Caches the online model list for 1 hour to speed up browsing.
 - **Detailed Views**: Displays model size, parameter count, and descriptions in a clean table format.
@@ -91,7 +92,7 @@ Enter model number or name to pull:
 
 ## File Checksums (MD5)
 - **fetch_models.ps1**: `4991AC4BCA941C6A57BAFF9B632A2D4C`
-- **ollamaLauncher.bat**: `8A12D6F0850A9C648F4A503BBDA6D271`
+- **ollamaLauncher.bat**: `30FB7CC739D7424646F99784D1A2238F`
 
 ## Author
 Mike
