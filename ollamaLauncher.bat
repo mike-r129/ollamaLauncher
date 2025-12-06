@@ -353,6 +353,7 @@ REM Initialize sort settings if not set
 if "%SORT_MODE%"=="" (
     set "SORT_MODE=DEFAULT"
     set "SORT_DESC=0"
+    set "SEARCH_TERM="
 )
 
 REM Apply sort and load models
@@ -384,18 +385,19 @@ echo For descriptions and the full list, visit https://ollama.com/library
 echo.
 REM Show navigation options based on current page position
 set "nav_line="
-if !page! lss !total_pages! set "nav_line=[N] Next Page  "
-if !page! gtr 1 set "nav_line=!nav_line![P] Previous Page  "
+if !page! gtr 1 set "nav_line=[P] Previous    "
+if !page! lss !total_pages! set "nav_line=!nav_line![N] Next Page   "
 set "nav_line=!nav_line![R] Refresh List"
 
 echo !nav_line!
-echo [S] Sort Size  [D] Default Sort  [C] Cancel  [X] Exit
+echo [F] Find Model  [S] Sort Size  [D] Default Sort  [C] Cancel  [X] Exit
 set /p model_input="Enter model number or name to pull: "
 
 REM Handle pagination navigation commands
 if /i "!model_input!"=="n" goto handle_next_page
 if /i "!model_input!"=="p" goto handle_prev_page
 if /i "!model_input!"=="r" goto handle_refresh
+if /i "!model_input!"=="f" goto handle_search
 if /i "!model_input!"=="s" goto handle_sort_size
 if /i "!model_input!"=="d" goto handle_sort_default
 if /i "!model_input!"=="x" (
@@ -417,6 +419,14 @@ if "!model_input!"=="" (
 )
 
 goto handle_selection
+
+:handle_search
+echo.
+set /p query="Enter search term: "
+set "SEARCH_TERM=%query%"
+set "page=1"
+call :apply_sort
+goto show_models_page
 
 :handle_sort_size
 if "!SORT_MODE!"=="SIZE" (
@@ -459,6 +469,7 @@ if !page! gtr 1 (
 :handle_refresh
 del "%MODELS_CACHE%"
 set "reached_end="
+set "SEARCH_TERM="
 goto fetch_list
 
 :handle_selection
@@ -558,10 +569,10 @@ exit /b
 
 :apply_sort
 REM Sort the cache file based on current mode and save to sorted file
-if "%SORT_MODE%"=="DEFAULT" (
+if "%SORT_MODE%"=="DEFAULT" if "%SEARCH_TERM%"=="" (
     copy /Y "%MODELS_CACHE%" "%MODELS_SORTED%" >nul
 ) else (
-    powershell -NoProfile -Command "$s='%MODELS_CACHE%'; $d='%MODELS_SORTED%'; $m='%SORT_MODE%'; $desc=('%SORT_DESC%' -eq '1'); $data=Import-Csv $s -Delimiter '|' -Header 'Name','Size','Params','Description' -Encoding UTF8; if($m -eq 'SIZE'){$data=$data | Sort-Object -Property @{Expression={if($_.Size -match '([\d\.]+) GB'){[double]$matches[1]}elseif($_.Size -match '< 1 GB'){0.1}else{-1}}} -Descending:$desc}; [System.IO.File]::WriteAllLines($d, ($data | ForEach-Object { $_.Name+'|'+$_.Size+'|'+$_.Params+'|'+$_.Description }))"
+    powershell -NoProfile -Command "$s='%MODELS_CACHE%'; $d='%MODELS_SORTED%'; $m='%SORT_MODE%'; $desc=('%SORT_DESC%' -eq '1'); $q=$env:SEARCH_TERM; $data=Import-Csv $s -Delimiter '|' -Header 'Name','Size','Params','Description' -Encoding UTF8; if($q){$data=$data | Where-Object {$_.Name -like '*'+$q+'*'}}; if($m -eq 'SIZE'){$data=$data | Sort-Object -Property @{Expression={if($_.Size -match '([\d\.]+) GB'){[double]$matches[1]}elseif($_.Size -match '< 1 GB'){0.1}else{-1}}} -Descending:$desc}; [System.IO.File]::WriteAllLines($d, ($data | ForEach-Object { $_.Name+'|'+$_.Size+'|'+$_.Params+'|'+$_.Description }))"
 )
 call :load_models
 exit /b
