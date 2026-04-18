@@ -32,13 +32,21 @@ REM ============================================================================
 setlocal enabledelayedexpansion
 set "OLLAMA_STARTED=0"
 
-REM Use system temp directory for models cache to avoid desktop clutter
-set "MODELS_CACHE=%TEMP%\ollama-models.txt"
-set "MODELS_SORTED=%TEMP%\ollama-models-sorted.txt"
-
 REM Use APPDATA for storing fetch_models.ps1 script
 set "APPDATA_OLLAMA=%APPDATA%\ollamaLauncher"
 set "FETCH_MODELS_SCRIPT=%APPDATA_OLLAMA%\fetch_models.ps1"
+set "REPOS_CONFIG=%APPDATA_OLLAMA%\repos.json"
+set "REPOS_LIST=%APPDATA_OLLAMA%\repos_list.txt"
+set "REPO_STATE_FILE=%APPDATA_OLLAMA%\state.txt"
+
+REM Active model repository (defaults to Ollama, persisted to state file)
+set "CURRENT_REPO=Ollama"
+set "CURRENT_REPO_TYPE=ollama"
+set "CURRENT_REPO_PREFIX="
+
+REM Per-repo cache files derived from CURRENT_REPO (set in :load_repo_state)
+set "MODELS_CACHE=%TEMP%\ollama-models-Ollama.txt"
+set "MODELS_SORTED=%TEMP%\ollama-models-sorted-Ollama.txt"
 
 REM Configurable pagination settings
 set "ITEMS_PER_PAGE=50"
@@ -51,6 +59,9 @@ if not exist "%APPDATA_OLLAMA%" mkdir "%APPDATA_OLLAMA%"
 
 REM Create fetch_models.ps1 in APPDATA on first run
 call :create_fetch_script
+
+REM Load saved active repo (if any) and ensure repos.json exists
+call :load_repo_state
 
 :start
 echo              @@@            @@@              
@@ -160,7 +171,7 @@ for /f "usebackq delims=" %%a in ("%LOCAL_MODELS_LIST%") do (
 )
 
 echo. 
-echo [0/U] Update/Pull a new Model    [R] Remove a model   [L] Exit CLI ^& Start Ollama.exe   [X] Exit
+echo [0/U] Update/Pull a new Model   [E] Repository (!CURRENT_REPO!)   [R] Remove a model   [L] Exit CLI ^& Start Ollama.exe   [X] Exit
 echo.
 :prompt
 set "choice="
@@ -174,6 +185,7 @@ if /i "%choice%"=="exit" goto cleanup
 if /i "%choice%"=="R" goto remove_model
 if /i "%choice%"=="L" goto launch_ollama
 if /i "%choice%"=="u" goto fetch_list
+if /i "%choice%"=="e" goto main_repository
 if "%choice%"=="" goto invalid
 
 REM Validate user input: check if numeric
@@ -347,10 +359,10 @@ goto prompt
 REM Fetch online models from Ollama library
 REM Always fetch fresh models to ensure latest catalog (unless cache was just created)
 if not exist "%MODELS_CACHE%" (
-    REM Fetch top 100 models from Ollama.com using PowerShell script
+    REM Fetch top 100 models from the active repository using PowerShell script
     echo.
-    echo Fetching latest top 100 models from Ollama.com...
-    powershell -ExecutionPolicy Bypass -File "%FETCH_MODELS_SCRIPT%" -CacheFile "%MODELS_CACHE%" -Limit 100
+    echo Fetching latest top 100 models from !CURRENT_REPO!...
+    powershell -ExecutionPolicy Bypass -File "%FETCH_MODELS_SCRIPT%" -CacheFile "%MODELS_CACHE%" -Repo "!CURRENT_REPO!"
     
     if not exist "%MODELS_CACHE%" (
         echo.
@@ -365,9 +377,9 @@ if not exist "%MODELS_CACHE%" (
     
     if !errorlevel! neq 0 (
         echo.
-        echo Cache is older than 1 hour. Refreshing models from Ollama.com...
+        echo Cache is older than 1 hour. Refreshing models from !CURRENT_REPO!...
         REM Fetch to temporary file first to avoid losing old cache if fetch fails
-        powershell -ExecutionPolicy Bypass -File "%FETCH_MODELS_SCRIPT%" -CacheFile "%MODELS_CACHE%.tmp" -Limit 100
+        powershell -ExecutionPolicy Bypass -File "%FETCH_MODELS_SCRIPT%" -CacheFile "%MODELS_CACHE%.tmp" -Repo "!CURRENT_REPO!"
         
         if exist "%MODELS_CACHE%.tmp" (
             move /Y "%MODELS_CACHE%.tmp" "%MODELS_CACHE%" >nul
@@ -413,6 +425,9 @@ if not "!SEARCH_TERM!"=="" (
     if "!SORT_MODE!"=="SIZE" (
         if "!SORT_DESC!"=="1" (set "sort_info=Size (Desc)") else (set "sort_info=Size (Asc)")
     )
+    if "!SORT_MODE!"=="FIELD" (
+        if "!SORT_DESC!"=="1" (set "sort_info=!SORT_FIELD_NAME! (Desc)") else (set "sort_info=!SORT_FIELD_NAME! (Asc)")
+    )
     echo Showing Models (Page !page!/!total_pages!^) - Sorted by: !sort_info!
 )
 echo.
@@ -420,25 +435,25 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "$p=!page!; $l=!items_per
 
 echo.
 if not "!SEARCH_TERM!"=="" (
-    echo (Page !page!/!total_pages!^) - Search Results: !SEARCH_TERM!
+    echo (Page !page!/!total_pages!^) - Search Results: !SEARCH_TERM!  [Repo: !CURRENT_REPO!]
     echo.
     set "nav_line="
     if !page! gtr 1 set "nav_line=[P] Previous    "
     if !page! lss !total_pages! set "nav_line=!nav_line![N] Next Page   "
-    set "nav_line=!nav_line![R] Refresh List"
+    set "nav_line=!nav_line![R] Refresh List   [E] Repository"
     echo !nav_line!
     echo [C] Cancel [X] Exit
 ) else (
-    echo (Page !page!/!total_pages!^) - Sorted by: !sort_info!
+    echo (Page !page!/!total_pages!^) - Sorted by: !sort_info!  [Repo: !CURRENT_REPO!]
     echo.
     REM Show navigation options based on current page position
     set "nav_line="
     if !page! gtr 1 set "nav_line=[P] Previous    "
     if !page! lss !total_pages! set "nav_line=!nav_line![N] Next Page   "
-    set "nav_line=!nav_line![R] Refresh List"
+    set "nav_line=!nav_line![R] Refresh List   [E] Repository"
 
     echo !nav_line!
-    echo [F] Find Model  [S] Sort Size   [D] Default Sort  [C] Cancel  [X] Exit
+    echo [F] Find Model  [S] Sort Size   [I] Sort Field  [D] Default Sort  [C] Cancel  [X] Exit
 )
 set /p model_input="Enter model number or name to pull: "
 
@@ -446,8 +461,10 @@ REM Handle pagination navigation commands
 if /i "!model_input!"=="n" goto handle_next_page
 if /i "!model_input!"=="p" goto handle_prev_page
 if /i "!model_input!"=="r" goto handle_refresh
+if /i "!model_input!"=="e" goto handle_repository
 if /i "!model_input!"=="f" goto handle_search
 if /i "!model_input!"=="s" goto handle_sort_size
+if /i "!model_input!"=="i" goto handle_sort_field
 if /i "!model_input!"=="d" goto handle_sort_default
 if /i "!model_input!"=="x" (
     goto cleanup
@@ -507,6 +524,62 @@ goto show_models_page
 :handle_sort_default
 set "SORT_MODE=DEFAULT"
 set "SORT_DESC=0"
+set "SORT_FIELD_NAME="
+set "SORT_FIELD_REGEX="
+set "SORT_FIELD_NUMERIC="
+call :apply_sort
+goto show_models_page
+
+:handle_sort_field
+set "SORT_FIELDS_LIST=%APPDATA_OLLAMA%\sort_fields.txt"
+powershell -ExecutionPolicy Bypass -File "%FETCH_MODELS_SCRIPT%" -ListSortFields -Repo "!CURRENT_REPO!" -CacheFile "!SORT_FIELDS_LIST!" -ConfigFile "%REPOS_CONFIG%" >nul 2>&1
+if not exist "!SORT_FIELDS_LIST!" (
+    echo.
+    echo No sort fields configured for repository "!CURRENT_REPO!".
+    timeout /t 2 /nobreak >nul
+    goto show_models_page
+)
+set "sf_count=0"
+for /f "usebackq tokens=1,2,3 delims=|" %%a in ("!SORT_FIELDS_LIST!") do (
+    set /a sf_count+=1
+    set "sf_name[!sf_count!]=%%a"
+    set "sf_regex[!sf_count!]=%%b"
+    set "sf_num[!sf_count!]=%%c"
+)
+if !sf_count! equ 0 (
+    echo.
+    echo No sort fields configured for repository "!CURRENT_REPO!".
+    timeout /t 2 /nobreak >nul
+    goto show_models_page
+)
+echo.
+echo =============== Sort by Field ===============
+for /L %%i in (1,1,!sf_count!) do (
+    echo   %%i. !sf_name[%%i]!
+)
+echo.
+set "sf_choice="
+set /p sf_choice="Enter field number (or C to cancel): "
+if /i "!sf_choice!"=="c" goto show_models_page
+if "!sf_choice!"=="" goto show_models_page
+set "is_numeric=true"
+for /f "delims=0123456789" %%a in ("!sf_choice!") do set "is_numeric=false"
+if "!is_numeric!"=="false" goto handle_sort_field
+if !sf_choice! lss 1 goto handle_sort_field
+if !sf_choice! gtr !sf_count! goto handle_sort_field
+
+REM Toggle direction if same field is reselected, otherwise default to descending
+if "!SORT_MODE!"=="FIELD" if /i "!SORT_FIELD_NAME!"=="!sf_name[%sf_choice%]!" (
+    if "!SORT_DESC!"=="1" ( set "SORT_DESC=0" ) else ( set "SORT_DESC=1" )
+    goto sf_apply
+)
+set "SORT_MODE=FIELD"
+set "SORT_DESC=1"
+set "SORT_FIELD_NAME=!sf_name[%sf_choice%]!"
+set "SORT_FIELD_REGEX=!sf_regex[%sf_choice%]!"
+set "SORT_FIELD_NUMERIC=!sf_num[%sf_choice%]!"
+:sf_apply
+set "page=1"
 call :apply_sort
 goto show_models_page
 
@@ -598,7 +671,10 @@ set "sanitized_model=!sanitized_model:&=!"
 set "sanitized_model=!sanitized_model:|=!"
 if not "!sanitized_model!"=="" set "model_name=!sanitized_model!"
 
-ollama pull "!model_name!"
+REM Apply repo-specific pull prefix (e.g. hf.co/ for HuggingFace)
+set "pull_target=!CURRENT_REPO_PREFIX!!model_name!"
+echo Running: ollama pull "!pull_target!"
+ollama pull "!pull_target!"
 if %errorlevel% neq 0 (
     echo.
     echo Error: Failed to pull model !model_name!.
@@ -645,7 +721,9 @@ if "!CURRENT_SORT!"=="DEFAULT" if "!SEARCH_TERM!"=="" set "DO_COPY=1"
 if "!DO_COPY!"=="1" (
     copy /Y "%MODELS_CACHE%" "%MODELS_SORTED%" >nul
 ) else (
-    powershell -NoProfile -Command "$s='%MODELS_CACHE%'; $d='%MODELS_SORTED%'; $m='!CURRENT_SORT!'; $desc=('!SORT_DESC!' -eq '1'); $q=$env:SEARCH_TERM; $data=Import-Csv $s -Delimiter '|' -Header 'Name','Size','Params','Description' -Encoding UTF8; if($q){$data=$data | Where-Object {$_.Name -like '*'+$q+'*'}}; if($m -eq 'SIZE'){$data=$data | Sort-Object -Property @{Expression={if($_.Size -match '([\d\.]+) GB'){[double]$matches[1]}elseif($_.Size -match '< 1 GB'){0.1}else{-1}}} -Descending:$desc}; $output=@($data | ForEach-Object { $_.Name+'|'+$_.Size+'|'+$_.Params+'|'+$_.Description }); if($output.Count -gt 0){[System.IO.File]::WriteAllLines($d, $output)}else{Set-Content -Path $d -Value '' -Encoding UTF8}"
+    set "SORT_FIELD_REGEX_ENV=!SORT_FIELD_REGEX!"
+    set "SORT_FIELD_NUMERIC_ENV=!SORT_FIELD_NUMERIC!"
+    powershell -NoProfile -Command "$s='%MODELS_CACHE%'; $d='%MODELS_SORTED%'; $m='!CURRENT_SORT!'; $desc=('!SORT_DESC!' -eq '1'); $q=$env:SEARCH_TERM; $rx=$env:SORT_FIELD_REGEX_ENV; $num=($env:SORT_FIELD_NUMERIC_ENV -eq '1'); $data=Import-Csv $s -Delimiter '|' -Header 'Name','Size','Params','Description' -Encoding UTF8; if($q){$data=$data | Where-Object {$_.Name -like '*'+$q+'*'}}; if($m -eq 'SIZE'){$data=$data | Sort-Object -Property @{Expression={if($_.Size -match '([\d\.]+) GB'){[double]$matches[1]}elseif($_.Size -match '< 1 GB'){0.1}else{-1}}} -Descending:$desc}; if($m -eq 'FIELD' -and $rx){$data=$data | Sort-Object -Property @{Expression={ $v=$null; if($_.Description -match $rx){ $v=$matches[1] }; if($num){ if($v){ try{[double]$v}catch{-1} } else { -1 } } else { if($v){ $v } else { '' } } }} -Descending:$desc}; $output=@($data | ForEach-Object { $_.Name+'|'+$_.Size+'|'+$_.Params+'|'+$_.Description }); if($output.Count -gt 0){[System.IO.File]::WriteAllLines($d, $output)}else{Set-Content -Path $d -Value '' -Encoding UTF8}"
 )
 call :load_models
 exit /b
@@ -669,6 +747,127 @@ if not exist "%FETCH_MODELS_SCRIPT%" (
     pause
     goto cleanup
 )
+exit /b
+
+:main_repository
+set "REPO_RETURN=main"
+goto handle_repository
+
+:handle_repository
+if not defined REPO_RETURN set "REPO_RETURN=models"
+REM Show available repositories from repos.json and let user choose the active one
+echo.
+echo Refreshing repository list...
+powershell -ExecutionPolicy Bypass -File "%FETCH_MODELS_SCRIPT%" -ListRepos -CacheFile "%REPOS_LIST%" -ConfigFile "%REPOS_CONFIG%" >nul 2>&1
+if not exist "%REPOS_LIST%" (
+    echo Error: Failed to read repository config at "%REPOS_CONFIG%".
+    pause
+    goto repo_return
+)
+
+set "repo_count=0"
+for /f "usebackq tokens=1,2,3,4 delims=|" %%a in ("%REPOS_LIST%") do (
+    set /a repo_count+=1
+    set "repo_name[!repo_count!]=%%a"
+    set "repo_type[!repo_count!]=%%b"
+    set "repo_desc[!repo_count!]=%%c"
+    set "repo_prefix[!repo_count!]=%%d"
+)
+
+echo.
+echo =============== Model Repositories ===============
+echo Current repository : !CURRENT_REPO!
+echo Config file        : %REPOS_CONFIG%
+echo (Edit the config file to add or remove repositories)
+echo.
+for /L %%i in (1,1,!repo_count!) do (
+    set "marker= "
+    if /i "!repo_name[%%i]!"=="!CURRENT_REPO!" set "marker=*"
+    echo  !marker! %%i. !repo_name[%%i]!  [!repo_type[%%i]!]
+    echo        !repo_desc[%%i]!
+)
+echo.
+set "repo_choice="
+set /p repo_choice="Enter the repository number to switch to (or C to cancel): "
+
+if /i "!repo_choice!"=="c" goto repo_return
+if /i "!repo_choice!"=="" goto repo_return
+
+set "is_numeric=true"
+for /f "delims=0123456789" %%a in ("!repo_choice!") do set "is_numeric=false"
+if "!is_numeric!"=="false" (
+    echo Invalid selection.
+    timeout /t 2 /nobreak >nul
+    goto handle_repository
+)
+if !repo_choice! lss 1 goto handle_repository
+if !repo_choice! gtr !repo_count! goto handle_repository
+
+set "CURRENT_REPO=!repo_name[%repo_choice%]!"
+set "CURRENT_REPO_TYPE=!repo_type[%repo_choice%]!"
+set "CURRENT_REPO_PREFIX=!repo_prefix[%repo_choice%]!"
+call :set_repo_paths
+call :save_repo_state
+
+REM Reset paging/search state and force fresh fetch for the new repo
+set "page=1"
+set "SEARCH_TERM="
+set "SORT_MODE=DEFAULT"
+set "SORT_DESC=0"
+set "SORT_FIELD_NAME="
+set "SORT_FIELD_REGEX="
+set "SORT_FIELD_NUMERIC="
+echo.
+echo Switched to repository: !CURRENT_REPO!
+timeout /t 1 /nobreak >nul
+if /i "!REPO_RETURN!"=="main" (
+    set "REPO_RETURN="
+    cls
+    goto start
+)
+set "REPO_RETURN="
+goto fetch_list
+
+:repo_return
+if /i "!REPO_RETURN!"=="main" (
+    set "REPO_RETURN="
+    cls
+    goto start
+)
+set "REPO_RETURN="
+goto show_models_page
+
+:set_repo_paths
+REM Recompute per-repo cache file paths based on CURRENT_REPO
+set "MODELS_CACHE=%TEMP%\ollama-models-!CURRENT_REPO!.txt"
+set "MODELS_SORTED=%TEMP%\ollama-models-sorted-!CURRENT_REPO!.txt"
+exit /b
+
+:load_repo_state
+REM Ensure repos.json exists by asking the PS script to materialize defaults if needed
+if not exist "%REPOS_CONFIG%" (
+    powershell -ExecutionPolicy Bypass -File "%FETCH_MODELS_SCRIPT%" -ListRepos -CacheFile "%REPOS_LIST%" -ConfigFile "%REPOS_CONFIG%" >nul 2>&1
+)
+REM Read previously selected repo, if any
+if exist "%REPO_STATE_FILE%" (
+    set /p saved_repo=<"%REPO_STATE_FILE%"
+    if not "!saved_repo!"=="" set "CURRENT_REPO=!saved_repo!"
+)
+REM Refresh repos_list.txt and look up type+prefix for CURRENT_REPO
+powershell -ExecutionPolicy Bypass -File "%FETCH_MODELS_SCRIPT%" -ListRepos -CacheFile "%REPOS_LIST%" -ConfigFile "%REPOS_CONFIG%" >nul 2>&1
+if exist "%REPOS_LIST%" (
+    for /f "usebackq tokens=1,2,3,4 delims=|" %%a in ("%REPOS_LIST%") do (
+        if /i "%%a"=="!CURRENT_REPO!" (
+            set "CURRENT_REPO_TYPE=%%b"
+            set "CURRENT_REPO_PREFIX=%%d"
+        )
+    )
+)
+call :set_repo_paths
+exit /b
+
+:save_repo_state
+> "%REPO_STATE_FILE%" echo !CURRENT_REPO!
 exit /b
 
 :cleanup
