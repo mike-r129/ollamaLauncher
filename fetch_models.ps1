@@ -7,7 +7,9 @@ param(
     [string]$Repo='Ollama',
     [string]$ConfigFile,
     [switch]$ListRepos,
-    [switch]$ListSortFields
+    [switch]$ListSortFields,
+    [switch]$ValidatePull,
+    [string]$ModelName
 )
 $ErrorActionPreference='Stop'
 [Console]::OutputEncoding=[System.Text.Encoding]::UTF8
@@ -77,7 +79,7 @@ function New-DefaultRepoConfig {
             defaultLimit = 500
             format       = 'json'
             baseUrl      = 'https://huggingface.co/api/models'
-            queryParams  = [PSCustomObject]@{ sort='trendingScore'; direction='-1'; full='false' }
+            queryParams  = [PSCustomObject]@{ filter='gguf'; sort='trendingScore'; direction='-1'; full='false' }
             pagination   = [PSCustomObject]@{ type='cursor-link'; pageSizeParam='limit'; pageSize=100; maxPages=50 }
             items        = [PSCustomObject]@{ path='$' }
             fields       = [PSCustomObject]@{
@@ -112,6 +114,51 @@ try {
 }
 
 # ----------------------------------------------------------------
+# Security: validate the loaded config (https-only baseUrl + regex
+# length caps to mitigate ReDoS via tampered repos.json).
+# ----------------------------------------------------------------
+function Test-RepoConfig($repos) {
+    $maxRegexLen = 2000
+    foreach ($r in $repos) {
+        $url = ''
+        if ($r.PSObject.Properties['baseUrl']) { $url = [string]$r.baseUrl }
+        if (-not $url -or $url -notmatch '^https://') {
+            Write-Error "Repo '$($r.name)' has missing or non-https baseUrl ('$url'). Edit '$ConfigFile' to fix."
+            exit 1
+        }
+        try { $null = [uri]$url } catch {
+            Write-Error "Repo '$($r.name)' baseUrl is not a valid URI: '$url'"; exit 1
+        }
+        if ($r.PSObject.Properties['items'] -and $r.items -and $r.items.PSObject.Properties['regex']) {
+            if (([string]$r.items.regex).Length -gt $maxRegexLen) {
+                Write-Error "Repo '$($r.name)' items.regex exceeds $maxRegexLen chars."; exit 1
+            }
+        }
+        if ($r.PSObject.Properties['fields'] -and $r.fields) {
+            foreach ($fp in $r.fields.PSObject.Properties) {
+                $sel = $fp.Value
+                $rx = ''
+                if ($sel -is [string]) { $rx = $sel }
+                elseif ($sel -and $sel.PSObject.Properties['regex']) { $rx = [string]$sel.regex }
+                if ($rx.Length -gt $maxRegexLen) {
+                    Write-Error "Repo '$($r.name)' field '$($fp.Name)' regex exceeds $maxRegexLen chars."; exit 1
+                }
+            }
+        }
+        if ($r.PSObject.Properties['sortFields'] -and $r.sortFields) {
+            foreach ($sf in $r.sortFields) {
+                $rx = ''
+                if ($sf.PSObject.Properties['extract']) { $rx = [string]$sf.extract }
+                if ($rx.Length -gt $maxRegexLen) {
+                    Write-Error "Repo '$($r.name)' sortField '$($sf.name)' extract regex exceeds $maxRegexLen chars."; exit 1
+                }
+            }
+        }
+    }
+}
+Test-RepoConfig $repos
+
+# ----------------------------------------------------------------
 # -ListRepos : write name|format|description|pullPrefix|defaultLimit
 # ----------------------------------------------------------------
 if ($ListRepos) {
@@ -122,7 +169,9 @@ if ($ListRepos) {
         $desc = if ($r.PSObject.Properties['description'])  { $r.description }  else { '' }
         $pp   = if ($r.PSObject.Properties['pullPrefix'])   { $r.pullPrefix }   else { '' }
         $dl   = if ($r.PSObject.Properties['defaultLimit']) { $r.defaultLimit } else { 100 }
-        $lines += "$($r.name)|$fmt|$desc|$pp|$dl"
+        $hostName = ''
+        try { $hostName = ([uri]$r.baseUrl).Host } catch { $hostName = '' }
+        $lines += "$($r.name)|$fmt|$desc|$pp|$dl|$hostName"
     }
     [System.IO.File]::WriteAllLines($CacheFile, $lines)
     foreach ($l in $lines) { Write-Host $l }
@@ -147,6 +196,51 @@ if ($ListSortFields) {
     }
     [System.IO.File]::WriteAllLines($CacheFile, $lines)
     foreach ($l in $lines) { Write-Host $l }
+    exit 0
+}
+
+# ----------------------------------------------------------------
+# -ValidatePull -Repo X -ModelName Y
+# Validates that a pull target is shape-safe for the active repo.
+# Prevents a tampered repos.json (or a malicious cache entry) from
+# tricking `ollama pull` into hitting an attacker-controlled OCI
+# registry. Exit 0 = safe, exit 1 = rejected (with reason on stderr).
+# ----------------------------------------------------------------
+if ($ValidatePull) {
+    $r = $repos | Where-Object { $_.name -eq $Repo } | Select-Object -First 1
+    if (-not $r) { Write-Error "Repository '$Repo' not found."; exit 1 }
+    if (-not $ModelName) { Write-Error "-ModelName is required."; exit 1 }
+    $name = $ModelName.Trim()
+    if ($name.Length -eq 0)   { Write-Error "Model name is empty."; exit 1 }
+    if ($name.Length -gt 256) { Write-Error "Model name exceeds 256 chars."; exit 1 }
+    if ($name -match '[\x00-\x1f]')              { Write-Error "Model name contains control characters."; exit 1 }
+    if ($name -match '[\s"''`;|&<>^$()\\]')      { Write-Error "Model name contains shell metacharacters or whitespace."; exit 1 }
+    if ($name -match '\.\.')                      { Write-Error "Model name contains '..'"; exit 1 }
+    if ($name -match '://')                       { Write-Error "Model name contains a URL scheme."; exit 1 }
+    $prefix = ''
+    if ($r.PSObject.Properties['pullPrefix']) { $prefix = [string]$r.pullPrefix }
+    if ($prefix) {
+        if (-not $name.StartsWith($prefix)) {
+            Write-Error "Model name '$name' must start with required prefix '$prefix' for repo '$Repo'."; exit 1
+        }
+        $rest = $name.Substring($prefix.Length)
+        if ($rest -notmatch '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+(:[A-Za-z0-9._-]+)?$') {
+            Write-Error "Model reference '$rest' does not match expected '<owner>/<model>[:<tag>]' shape."; exit 1
+        }
+    } else {
+        # Empty prefix (e.g. Ollama). Accept: model[:tag] OR namespace/model[:tag].
+        if ($name -notmatch '^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)?(:[A-Za-z0-9._-]+)?$') {
+            Write-Error "Model name '$name' has invalid shape for repo '$Repo'."; exit 1
+        }
+        # First path segment must not look like a hostname (contain a dot).
+        if ($name -match '^([^/:]+)/') {
+            $first = $Matches[1]
+            if ($first.Contains('.')) {
+                Write-Error "Model name '$name' appears to specify a remote registry host ('$first'); not allowed for repo '$Repo'."; exit 1
+            }
+        }
+    }
+    Write-Host "OK"
     exit 0
 }
 
@@ -193,6 +287,32 @@ function Get-PropValue($obj, $name, $default=$null) {
     return $default
 }
 
+# Safe regex wrappers: enforce a 2-second timeout to mitigate ReDoS
+# from patterns sourced from a (possibly tampered) repos.json.
+$script:RegexTimeout = [TimeSpan]::FromSeconds(2)
+function Invoke-SafeRegexMatches([string]$inputText, [string]$pattern) {
+    if ([string]::IsNullOrEmpty($pattern)) { return @() }
+    try {
+        $rx = [regex]::new($pattern, [System.Text.RegularExpressions.RegexOptions]::None, $script:RegexTimeout)
+        return $rx.Matches($inputText)
+    } catch [System.Text.RegularExpressions.RegexMatchTimeoutException] {
+        Write-Host "Regex timed out (skipped): $pattern" -ForegroundColor Yellow; return @()
+    } catch {
+        Write-Host "Regex error '$pattern': $_" -ForegroundColor Yellow; return @()
+    }
+}
+function Invoke-SafeRegexMatch([string]$inputText, [string]$pattern) {
+    if ([string]::IsNullOrEmpty($pattern)) { return $null }
+    try {
+        $rx = [regex]::new($pattern, [System.Text.RegularExpressions.RegexOptions]::None, $script:RegexTimeout)
+        return $rx.Match($inputText)
+    } catch [System.Text.RegularExpressions.RegexMatchTimeoutException] {
+        Write-Host "Regex timed out (skipped): $pattern" -ForegroundColor Yellow; return $null
+    } catch {
+        Write-Host "Regex error '$pattern': $_" -ForegroundColor Yellow; return $null
+    }
+}
+
 function Get-FieldFromHtml($html, $sel) {
     if ($sel -is [string]) {
         $regex=$sel; $group=1; $decode=$false; $trim=$true; $multi=$false
@@ -205,7 +325,7 @@ function Get-FieldFromHtml($html, $sel) {
     }
     if ($multi) {
         $vals = @()
-        foreach ($m in [regex]::Matches($html, $regex)) {
+        foreach ($m in (Invoke-SafeRegexMatches $html $regex)) {
             $v = $m.Groups[$group].Value
             if ($trim)   { $v = ($v.Trim() -replace '\s+',' ') }
             if ($decode) { $v = [System.Net.WebUtility]::HtmlDecode($v) }
@@ -213,8 +333,8 @@ function Get-FieldFromHtml($html, $sel) {
         }
         return ,$vals
     }
-    $m = [regex]::Match($html, $regex)
-    if (-not $m.Success) { return $null }
+    $m = Invoke-SafeRegexMatch $html $regex
+    if (-not $m -or -not $m.Success) { return $null }
     $v = $m.Groups[$group].Value
     if ($trim)   { $v = ($v.Trim() -replace '\s+',' ') }
     if ($decode) { $v = [System.Net.WebUtility]::HtmlDecode($v) }
@@ -280,7 +400,7 @@ function New-RequestUrl($repo, $extraQuery) {
     return "$($repo.baseUrl)?$qs"
 }
 
-function Get-NextLink($response) {
+function Get-NextLink($response, [string]$expectedHost) {
     $link = $null
     try {
         if ($response.Headers -and $response.Headers.ContainsKey('Link')) {
@@ -290,8 +410,18 @@ function Get-NextLink($response) {
     if (-not $link) { return $null }
     $linkStr = if ($link -is [System.Array]) { $link -join ', ' } else { [string]$link }
     $m = [regex]::Match($linkStr, '<([^>]+)>;\s*rel="?next"?')
-    if ($m.Success) { return $m.Groups[1].Value }
-    return $null
+    if (-not $m.Success) { return $null }
+    $candidate = $m.Groups[1].Value
+    try {
+        $u = [uri]$candidate
+        if ($u.Scheme -ne 'https') {
+            Write-Host "Refusing non-https next link: $candidate" -ForegroundColor Yellow; return $null
+        }
+        if ($expectedHost -and ($u.Host -ne $expectedHost)) {
+            Write-Host "Refusing cross-host next link ($($u.Host) != $expectedHost): $candidate" -ForegroundColor Yellow; return $null
+        }
+    } catch { return $null }
+    return $candidate
 }
 
 # ----------------------------------------------------------------
@@ -342,15 +472,21 @@ function Invoke-RepoFetch($repo, [int]$Skip, [int]$Limit) {
 
         # ---- Extract raw items ----
         $rawItems = @()
+        # Cap response content to 10MB before any regex/JSON parsing.
+        $content = $response.Content
+        if ($content -is [string] -and $content.Length -gt 10000000) {
+            Write-Host "Truncating response from $($content.Length) to 10MB" -ForegroundColor Yellow
+            $content = $content.Substring(0, 10000000)
+        }
         if ($format -eq 'html') {
             $itemsCfg = Get-PropValue $repo 'items' $null
             if (-not $itemsCfg) { Write-Error "html repo missing items.regex"; return $results }
             $grp = [int](Get-PropValue $itemsCfg 'group' 1)
-            foreach ($m in [regex]::Matches($response.Content, $itemsCfg.regex)) {
+            foreach ($m in (Invoke-SafeRegexMatches $content $itemsCfg.regex)) {
                 $rawItems += $m.Groups[$grp].Value
             }
         } else {
-            $data = $response.Content | ConvertFrom-Json
+            $data = $content | ConvertFrom-Json
             $itemsCfg = Get-PropValue $repo 'items' $null
             $path = [string](Get-PropValue $itemsCfg 'path' '$')
             if ($path -eq '$' -or [string]::IsNullOrEmpty($path)) {
@@ -414,7 +550,9 @@ function Invoke-RepoFetch($repo, [int]$Skip, [int]$Limit) {
             'page'        { $current++ }
             'offset'      { $current += [int](Get-PropValue $pag 'pageSize' $rawItems.Count) }
             'cursor-link' {
-                $nextUrl = Get-NextLink $response
+                $expectedHost = ''
+                try { $expectedHost = ([uri]$repo.baseUrl).Host } catch { $expectedHost = '' }
+                $nextUrl = Get-NextLink $response $expectedHost
                 if (-not $nextUrl) { Write-Host "No next link; pagination ends." -ForegroundColor Gray; break }
             }
             default { return $results }
