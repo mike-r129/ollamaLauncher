@@ -38,11 +38,13 @@ set "FETCH_MODELS_SCRIPT=%APPDATA_OLLAMA%\fetch_models.ps1"
 set "REPOS_CONFIG=%APPDATA_OLLAMA%\repos.json"
 set "REPOS_LIST=%APPDATA_OLLAMA%\repos_list.txt"
 set "REPO_STATE_FILE=%APPDATA_OLLAMA%\state.txt"
+set "TRUSTED_HOSTS_FILE=%APPDATA_OLLAMA%\trusted_hosts.txt"
 
 REM Active model repository (defaults to Ollama, persisted to state file)
 set "CURRENT_REPO=Ollama"
 set "CURRENT_REPO_TYPE=ollama"
 set "CURRENT_REPO_PREFIX="
+set "CURRENT_REPO_HOST="
 
 REM Per-repo cache files derived from CURRENT_REPO (set in :load_repo_state)
 set "MODELS_CACHE=%TEMP%\ollama-models-Ollama.txt"
@@ -673,6 +675,19 @@ if not "!sanitized_model!"=="" set "model_name=!sanitized_model!"
 
 REM Apply repo-specific pull prefix (e.g. hf.co/ for HuggingFace)
 set "pull_target=!CURRENT_REPO_PREFIX!!model_name!"
+
+REM Validate pull target shape against the active repo's rules
+REM (defense vs a tampered repos.json redirecting pulls to an attacker registry).
+powershell -ExecutionPolicy Bypass -File "%FETCH_MODELS_SCRIPT%" -ValidatePull -Repo "!CURRENT_REPO!" -ModelName "!pull_target!" -ConfigFile "%REPOS_CONFIG%" >nul 2>&1
+if errorlevel 1 (
+    echo.
+    echo Error: Pull target "!pull_target!" failed safety validation for repo "!CURRENT_REPO!".
+    echo This can occur if repos.json was tampered with or contains an unexpected entry.
+    echo.
+    pause
+    goto show_models_page
+)
+
 echo Running: ollama pull "!pull_target!"
 ollama pull "!pull_target!"
 if %errorlevel% neq 0 (
@@ -766,12 +781,13 @@ if not exist "%REPOS_LIST%" (
 )
 
 set "repo_count=0"
-for /f "usebackq tokens=1,2,3,4 delims=|" %%a in ("%REPOS_LIST%") do (
+for /f "usebackq tokens=1,2,3,4,5,6 delims=|" %%a in ("%REPOS_LIST%") do (
     set /a repo_count+=1
     set "repo_name[!repo_count!]=%%a"
     set "repo_type[!repo_count!]=%%b"
     set "repo_desc[!repo_count!]=%%c"
     set "repo_prefix[!repo_count!]=%%d"
+    set "repo_host[!repo_count!]=%%f"
 )
 
 echo.
@@ -803,9 +819,23 @@ if "!is_numeric!"=="false" (
 if !repo_choice! lss 1 goto handle_repository
 if !repo_choice! gtr !repo_count! goto handle_repository
 
+set "PREV_REPO=!CURRENT_REPO!"
+set "PREV_REPO_TYPE=!CURRENT_REPO_TYPE!"
+set "PREV_REPO_PREFIX=!CURRENT_REPO_PREFIX!"
+set "PREV_REPO_HOST=!CURRENT_REPO_HOST!"
 set "CURRENT_REPO=!repo_name[%repo_choice%]!"
 set "CURRENT_REPO_TYPE=!repo_type[%repo_choice%]!"
 set "CURRENT_REPO_PREFIX=!repo_prefix[%repo_choice%]!"
+set "CURRENT_REPO_HOST=!repo_host[%repo_choice%]!"
+call :check_repo_trust
+if errorlevel 1 (
+    set "CURRENT_REPO=!PREV_REPO!"
+    set "CURRENT_REPO_TYPE=!PREV_REPO_TYPE!"
+    set "CURRENT_REPO_PREFIX=!PREV_REPO_PREFIX!"
+    set "CURRENT_REPO_HOST=!PREV_REPO_HOST!"
+    timeout /t 2 /nobreak >nul
+    goto handle_repository
+)
 call :set_repo_paths
 call :save_repo_state
 
@@ -856,19 +886,64 @@ if exist "%REPO_STATE_FILE%" (
 REM Refresh repos_list.txt and look up type+prefix for CURRENT_REPO
 powershell -ExecutionPolicy Bypass -File "%FETCH_MODELS_SCRIPT%" -ListRepos -CacheFile "%REPOS_LIST%" -ConfigFile "%REPOS_CONFIG%" >nul 2>&1
 if exist "%REPOS_LIST%" (
-    for /f "usebackq tokens=1,2,3,4 delims=|" %%a in ("%REPOS_LIST%") do (
+    for /f "usebackq tokens=1,2,3,4,5,6 delims=|" %%a in ("%REPOS_LIST%") do (
         if /i "%%a"=="!CURRENT_REPO!" (
             set "CURRENT_REPO_TYPE=%%b"
             set "CURRENT_REPO_PREFIX=%%d"
+            set "CURRENT_REPO_HOST=%%f"
         )
     )
 )
 call :set_repo_paths
+call :check_repo_trust
+if errorlevel 1 (
+    echo.
+    echo The previously selected repository is no longer trusted.
+    echo Please choose a different repository.
+    timeout /t 2 /nobreak >nul
+    set "REPO_RETURN=main"
+    call :handle_repository
+)
 exit /b
 
 :save_repo_state
 > "%REPO_STATE_FILE%" echo !CURRENT_REPO!
 exit /b
+
+:check_repo_trust
+REM Verify the active repo's host has been explicitly trusted by the user.
+REM Trusted hosts persisted in %TRUSTED_HOSTS_FILE% as a single ;-delimited line.
+REM Returns errorlevel 0 if trusted (or no host to check), 1 if user declined.
+if not defined CURRENT_REPO_HOST exit /b 0
+if "!CURRENT_REPO_HOST!"=="" exit /b 0
+if not exist "%TRUSTED_HOSTS_FILE%" (
+    > "%TRUSTED_HOSTS_FILE%" echo huggingface.co;ollama.com
+)
+set "TRUSTED_HOSTS="
+set /p TRUSTED_HOSTS=<"%TRUSTED_HOSTS_FILE%"
+echo ;!TRUSTED_HOSTS!;| findstr /i /c:";!CURRENT_REPO_HOST!;" >nul
+if %errorlevel% equ 0 exit /b 0
+echo.
+echo =================== SECURITY WARNING ===================
+echo Repository "!CURRENT_REPO!" uses an UNTRUSTED host:
+echo     !CURRENT_REPO_HOST!
+echo.
+echo Currently trusted hosts: !TRUSTED_HOSTS!
+echo.
+echo Only trust this host if YOU added it to repos.json.
+echo A malicious config could redirect model downloads to an
+echo attacker-controlled registry.
+echo =========================================================
+echo.
+set "trust_choice="
+set /p trust_choice="Trust this host and continue? (y/N): "
+if /i not "!trust_choice!"=="y" (
+    echo Host not trusted. Aborting use of this repository.
+    exit /b 1
+)
+> "%TRUSTED_HOSTS_FILE%" echo !TRUSTED_HOSTS!;!CURRENT_REPO_HOST!
+echo Host trusted and recorded.
+exit /b 0
 
 :cleanup
 if "!OLLAMA_STARTED!"=="1" (
