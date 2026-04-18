@@ -46,68 +46,93 @@ if ($Local) {
         exit 1
     }
 }
-# Fetch HTML from Ollama model library
-$url='https://ollama.com/search'
-try {
-    $response=Invoke-WebRequest -Uri $url -UseBasicParsing
-    $content=$response.Content
-} catch {
-    Write-Error $_
-    exit 1
-}
-# Extract model list items from HTML
-$modelRegex=[regex]'(?s)<li x-test-model(.*?)</li>'
-$modelMatches=$modelRegex.Matches($content)
+# Fetch HTML from Ollama model library, iterating through pages
+$baseUrl='https://ollama.com/search'
 $models=@()
 $count=0
 $skipped=0
-# Process each model: extract name, description, and size estimates
-foreach($match in $modelMatches) {
-    if($skipped -lt $Skip) { $skipped++; continue }
-    if($count -ge $Limit) { break }
-    $modelHtml=$match.Groups[1].Value
-    # Extract model name from title
-    $nameRegex=[regex]'x-test-search-response-title>([^<]+)<'
-    $nameMatch=$nameRegex.Match($modelHtml)
-    $name=if($nameMatch.Success){[System.Net.WebUtility]::HtmlDecode($nameMatch.Groups[1].Value.Trim())}else{'Unknown'}
-    # Extract description
-    $descRegex=[regex]'(?s)<p[^>]*text-neutral-800[^>]*>(.*?)</p>'
-    $descMatch=$descRegex.Match($modelHtml)
-    $description=if($descMatch.Success){($descMatch.Groups[1].Value.Trim()-replace '\s+', ' ')}else{'No description available'}
-    # Extract and estimate download size based on parameters
-  $sizeRegex=[regex]'x-test-size[^>]*>([^<]+)<'
-  $sizeMatches=$sizeRegex.Matches($modelHtml)
-  if($sizeMatches.Count -gt 0) {
-        foreach($sm in $sizeMatches) {
-            $paramSize=$sm.Groups[1].Value.Trim()
-            $gbSize='Unknown'
-            # Standard models: size = (params * compression) + overhead
-            if($paramSize -match '(\d+(\.\d+)?)b'){
-                $pMatch=$Matches
-                $val=[double]$pMatch[1]
-                if($val -le 3){$est=$val*0.6+0.5}elseif($val -le 10){$est=$val*0.55+0.5}else{$est=$val*0.56}
-                $gbSize='{0:N1} GB'-f $est
-            }
-            # Tiny models
-            elseif($paramSize -match '(\d+)m') {
-                $gbSize='< 1 GB'
-            }
-            # MoE models (e.g. Mixtral 8x7B): size = (experts * expert_size) * compression
-            elseif($paramSize -match '(\d+)x(\d+(\.\d+)?)b'){
-                $mMatch=$Matches
-                $experts=[double]$mMatch[1]
-                $eSize=[double]$mMatch[2]
-                $total=$experts*$eSize
-                $est=$total*0.46
-                $gbSize='{0:N1} GB'-f $est
-            }
-            $fullName="$name`:$paramSize"
-            $models+=[PSCustomObject]@{Name=$fullName;SizeGB=$gbSize;Params=$paramSize;Description=$description}
-        }
-    } else {
-        $models+=[PSCustomObject]@{Name=$name;SizeGB='Unknown';Params='N/A';Description=$description}
+$page=1
+$baseUri=[System.Uri]$baseUrl
+
+# Loop through pages until no more models are found
+while($true) {
+    $uri=[System.UriBuilder]$baseUri
+    $uri.Query="page=$page"
+    $url=$uri.Uri.ToString()
+    
+    Write-Host "Fetching page $page..." -ForegroundColor Gray
+    
+    try {
+        $response=Invoke-WebRequest -Uri $url -UseBasicParsing
+        $content=$response.Content
+    } catch {
+        Write-Error $_
+        exit 1
     }
-    $count++
+    
+    # Extract model list items from HTML
+    $modelRegex=[regex]'(?s)<li x-test-model(.*?)</li>'
+    $pageModelMatches=$modelRegex.Matches($content)
+    
+    # If no models found on this page, we're done
+    if($pageModelMatches.Count -eq 0) {
+        Write-Host "No more models found. Pagination complete." -ForegroundColor Gray
+        break
+    }
+    
+    # Process each model on this page: extract name, description, and size estimates
+    foreach($match in $pageModelMatches) {
+        if($skipped -lt $Skip) { $skipped++; continue }
+        if($count -ge $Limit) { break }
+        $modelHtml=$match.Groups[1].Value
+        # Extract model name from title
+        $nameRegex=[regex]'x-test-search-response-title>([^<]+)<'
+        $nameMatch=$nameRegex.Match($modelHtml)
+        $name=if($nameMatch.Success){[System.Net.WebUtility]::HtmlDecode($nameMatch.Groups[1].Value.Trim())}else{'Unknown'}
+        # Extract description
+        $descRegex=[regex]'(?s)<p[^>]*text-neutral-800[^>]*>(.*?)</p>'
+        $descMatch=$descRegex.Match($modelHtml)
+        $description=if($descMatch.Success){($descMatch.Groups[1].Value.Trim()-replace '\s+', ' ')}else{'No description available'}
+        # Extract and estimate download size based on parameters
+      $sizeRegex=[regex]'x-test-size[^>]*>([^<]+)<'
+      $sizeMatches=$sizeRegex.Matches($modelHtml)
+      if($sizeMatches.Count -gt 0) {
+            foreach($sm in $sizeMatches) {
+                $paramSize=$sm.Groups[1].Value.Trim()
+                $gbSize='Unknown'
+                # Standard models: size = (params * compression) + overhead
+                if($paramSize -match '(\d+(\.\d+)?)b'){
+                    $pMatch=$Matches
+                    $val=[double]$pMatch[1]
+                    if($val -le 3){$est=$val*0.6+0.5}elseif($val -le 10){$est=$val*0.55+0.5}else{$est=$val*0.56}
+                    $gbSize='{0:N1} GB'-f $est
+                }
+                # Tiny models
+                elseif($paramSize -match '(\d+)m') {
+                    $gbSize='< 1 GB'
+                }
+                # MoE models (e.g. Mixtral 8x7B): size = (experts * expert_size) * compression
+                elseif($paramSize -match '(\d+)x(\d+(\.\d+)?)b'){
+                    $mMatch=$Matches
+                    $experts=[double]$mMatch[1]
+                    $eSize=[double]$mMatch[2]
+                    $total=$experts*$eSize
+                    $est=$total*0.46
+                    $gbSize='{0:N1} GB'-f $est
+                }
+                $fullName="$name`:$paramSize"
+                $models+=[PSCustomObject]@{Name=$fullName;SizeGB=$gbSize;Params=$paramSize;Description=$description}
+            }
+        } else {
+            $models+=[PSCustomObject]@{Name=$name;SizeGB='Unknown';Params='N/A';Description=$description}
+        }
+        $count++
+    }
+    
+    # Exit inner loop if limit reached
+    if($count -ge $Limit) { break }
+    
+    $page++
 }
 # Output results in pipe-delimited format (Name|Size|Params|Description)
 $lines=@()
