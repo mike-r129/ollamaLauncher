@@ -171,6 +171,9 @@ if ($ListRepos) {
         $dl   = if ($r.PSObject.Properties['defaultLimit']) { $r.defaultLimit } else { 100 }
         $hostName = ''
         try { $hostName = ([uri]$r.baseUrl).Host } catch { $hostName = '' }
+        # Emit "(none)" sentinel for empty pullPrefix so batch for/f does not collapse
+        # consecutive | delimiters and shift later fields (e.g. defaultLimit) into the prefix slot.
+        if ([string]::IsNullOrEmpty([string]$pp)) { $pp = '(none)' }
         $lines += "$($r.name)|$fmt|$desc|$pp|$dl|$hostName"
     }
     [System.IO.File]::WriteAllLines($CacheFile, $lines)

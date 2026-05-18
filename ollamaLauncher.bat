@@ -788,6 +788,8 @@ for /f "usebackq tokens=1,2,3,4,5,6 delims=|" %%a in ("%REPOS_LIST%") do (
     set "repo_desc[!repo_count!]=%%c"
     set "repo_prefix[!repo_count!]=%%d"
     set "repo_host[!repo_count!]=%%f"
+    REM Sentinel "(none)" represents an empty pullPrefix (avoids consecutive | collapse in for/f).
+    if /i "!repo_prefix[!repo_count!]!"=="(none)" set "repo_prefix[!repo_count!]="
 )
 
 echo.
@@ -891,6 +893,8 @@ if exist "%REPOS_LIST%" (
             set "CURRENT_REPO_TYPE=%%b"
             set "CURRENT_REPO_PREFIX=%%d"
             set "CURRENT_REPO_HOST=%%f"
+            REM Sentinel "(none)" represents an empty pullPrefix (avoids consecutive | collapse in for/f).
+            if /i "!CURRENT_REPO_PREFIX!"=="(none)" set "CURRENT_REPO_PREFIX="
         )
     )
 )
