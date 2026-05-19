@@ -89,6 +89,7 @@ Enter model number or name to pull:
 - **"Critical file 'fetch_models.ps1' is missing"**: Ensure `fetch_models.ps1` is in the same directory as `ollamaLauncher.bat` or already exists in %APPDATA%\ollamaLauncher\. The launcher requires `fetch_models.ps1` to function properly.
 - **"Failed to fetch models"**: Check your internet connection. The script tries to scrape `ollama.com/search`.
 - **Cache Issues**: If the online list seems outdated, use the `[R]` option in the fetch menu to force a refresh.
+- **`[V] View Models` missing for HuggingFace**: Tag/variant scraping is config-driven via a per-repo `tagFetch` block in `%APPDATA%\ollamaLauncher\repos.json`. If you upgraded from an older release, delete that file (or merge the new `tagFetch` blocks from defaults) and re-run the launcher to regenerate it.
 
 ## File Checksums (MD5)
 - **fetch_models.ps1**: `4991AC4BCA941C6A57BAFF9B632A2D4C`
