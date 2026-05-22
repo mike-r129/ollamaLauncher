@@ -70,7 +70,7 @@ function Load-Models {
 }
 
 # ----------------------------------------------------------------
-# Colour helpers  (same logic as model_selector.ps1 Get-FitColor)
+# Model metadata and KV cache calculation
 # ----------------------------------------------------------------
 function Get-SizeGb([string]$sizeStr) {
     if ($sizeStr -match '([\d\.]+)\s*GB') { return [double]$matches[1] }
@@ -79,16 +79,59 @@ function Get-SizeGb([string]$sizeStr) {
     return -1.0
 }
 
-function Get-FitColor([string]$sizeStr) {
-    $sizeGb = Get-SizeGb $sizeStr
-    if ($sizeGb -gt 0) {
-        $contextOverhead = ($script:contextLength / 50000.0) * $sizeGb
-        $sizeGb = $sizeGb + $contextOverhead
+function Get-ModelMetadata([string]$modelName) {
+    try {
+        $output = ollama show "$modelName" 2>$null | ForEach-Object { $_.Trim() }
+        $meta = @{}
+        foreach ($line in $output) {
+            if ($line -match '^\s*(\S+)\s+(.+)$') {
+                $key = $matches[1]
+                $val = $matches[2]
+                $meta[$key] = $val
+            }
+        }
+        return $meta
+    } catch {
+        return @{}
     }
-    if ($sizeGb -lt 0)                                              { return 'Gray'   }
-    if ($script:disk -gt 0 -and $sizeGb -gt $script:disk)          { return 'Red'    }
-    if ($script:vram -gt 0 -and $sizeGb -le $script:vram)          { return 'Green'  }
-    if ($sizeGb -le ($script:vram + $script:ram))                   { return 'Yellow' }
+}
+
+function Calculate-KvCacheGb([hashtable]$metadata, [int]$contextTokens) {
+    try {
+        $numLayers = if ($metadata.ContainsKey('num_layers')) { [int]$metadata['num_layers'] } else { 0 }
+        $numKvHeads = if ($metadata.ContainsKey('num_kv_head')) { [int]$metadata['num_kv_head'] } else { 0 }
+        $headDim = if ($metadata.ContainsKey('embedding_length')) { [int]$metadata['embedding_length'] / ([Math]::Max(1, $numKvHeads)) } else { 128 }
+
+        if ($numLayers -eq 0 -or $numKvHeads -eq 0) { return 0.0 }
+
+        $bytesPerElement = 2.0
+        $kvCacheBytes = $contextTokens * $numLayers * 2 * $numKvHeads * $headDim * $bytesPerElement
+        $kvCacheGb = $kvCacheBytes / 1073741824.0
+
+        return $kvCacheGb
+    } catch {
+        return 0.0
+    }
+}
+
+function Get-TotalMemoryEstimate([string]$modelName, [string]$sizeStr, [int]$contextTokens) {
+    $weightsGb = Get-SizeGb $sizeStr
+    if ($weightsGb -lt 0) { return -1.0 }
+
+    $metadata = Get-ModelMetadata $modelName
+    $kvCacheGb = Calculate-KvCacheGb $metadata $contextTokens
+    $safetyMargin = 1.15
+
+    return ($weightsGb + $kvCacheGb) * $safetyMargin
+}
+
+function Get-FitColor([string]$modelName, [string]$sizeStr, [int]$contextTokens) {
+    $totalGb = Get-TotalMemoryEstimate $modelName $sizeStr $contextTokens
+
+    if ($totalGb -lt 0)                                      { return 'Gray'   }
+    if ($script:disk -gt 0 -and $totalGb -gt $script:disk)  { return 'Red'    }
+    if ($script:vram -gt 0 -and $totalGb -le $script:vram)  { return 'Green'  }
+    if ($totalGb -le ($script:vram + $script:ram))          { return 'Yellow' }
     return 'Red'
 }
 
@@ -154,7 +197,7 @@ function Render-Full {
             $marker     = if ($isSelected) { '>' } else { ' ' }
             $num        = $i + 1
             $name       = Limit-Text $m.Name $script:nameWidth
-            $color      = Get-FitColor $m.Size
+            $color      = Get-FitColor $m.Name $m.Size $script:contextLength
 
             # Build fit label
             $sizeGb = Get-SizeGb $m.Size
@@ -235,13 +278,15 @@ function Show-ContextSelector {
         Write-Host ''
         for ($i = 0; $i -lt $contexts.Count; $i++) {
             $ctx = $contexts[$i]
-            # Calculate effective size overhead example using first installed model (if any)
+            # Calculate accurate KV cache overhead using first installed model (if any)
             $ovNote = ''
             if ($script:models.Count -gt 0) {
-                $firstSz = Get-SizeGb $script:models[0].Size
-                if ($firstSz -gt 0) {
-                    $overhead = ($ctx.tokens / 50000.0) * $firstSz
-                    $ovNote = ' (+{0:N1} GB overhead on {1})' -f $overhead, $script:models[0].Name
+                $firstModel = $script:models[0]
+                $currentKv = Calculate-KvCacheGb (Get-ModelMetadata $firstModel.Name) $script:contextLength
+                $newKv = Calculate-KvCacheGb (Get-ModelMetadata $firstModel.Name) $ctx.tokens
+                $kvDelta = $newKv - $currentKv
+                if ($kvDelta -ne 0) {
+                    $ovNote = ' (+{0:N1} GB KV cache)' -f $kvDelta
                 }
             }
             if ($i -eq $ci) {
