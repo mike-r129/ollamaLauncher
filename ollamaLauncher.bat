@@ -37,8 +37,10 @@ set "APPDATA_OLLAMA=%APPDATA%\ollamaLauncher"
 set "FETCH_MODELS_SCRIPT=%APPDATA_OLLAMA%\fetch_models.ps1"
 set "SELECTOR_SCRIPT=%APPDATA_OLLAMA%\model_selector.ps1"
 set "CONTEXT_SELECTOR_SCRIPT=%APPDATA_OLLAMA%\context_selector.ps1"
+set "LOCAL_SELECTOR_SCRIPT=%APPDATA_OLLAMA%\local_selector.ps1"
 set "SELECTOR_RESULT=%TEMP%\ollama-selector-result.txt"
 set "CONTEXT_SELECTOR_RESULT=%TEMP%\ollama-context-result.txt"
+set "LOCAL_SELECTOR_RESULT=%TEMP%\ollama-local-selector-result.txt"
 set "REPOS_CONFIG=%APPDATA_OLLAMA%\repos.json"
 set "REPOS_LIST=%APPDATA_OLLAMA%\repos_list.txt"
 set "REPO_STATE_FILE=%APPDATA_OLLAMA%\state.txt"
@@ -166,11 +168,76 @@ if not defined HW_DETECTED (
     set "HW_DETECTED=1"
 )
 
-REM Query and store all installed Ollama models
+REM ---------------------------------------------------------------
+REM  Local model selector - interactive screen with colour-coded fit
+REM ---------------------------------------------------------------
+set "LOCAL_MODELS_LIST=%TEMP%\ollama-local-list.txt"
+if exist "%LOCAL_SELECTOR_RESULT%" del "%LOCAL_SELECTOR_RESULT%" >nul 2>&1
+
+set "ACTIVE_LOCAL_SELECTOR=%LOCAL_SELECTOR_SCRIPT%"
+if exist "%~dp0local_selector.ps1" set "ACTIVE_LOCAL_SELECTOR=%~dp0local_selector.ps1"
+
+if not exist "!ACTIVE_LOCAL_SELECTOR!" goto legacy_local_prompt
+
+title ollamaLauncher - Installed Models (Context: !CONTEXT_LENGTH! tokens)
+set "OLLAMA_LAUNCHER_CTX=!CONTEXT_LENGTH!"
+
+powershell -NoProfile -ExecutionPolicy Bypass -File "!ACTIVE_LOCAL_SELECTOR!" ^
+    -LocalFile "%LOCAL_MODELS_LIST%" ^
+    -VramGb "!VRAM_GB!" -RamGb "!RAM_GB!" -DiskGb "!DISK_GB!" ^
+    -ContextLength "!CONTEXT_LENGTH!" ^
+    -CurrentRepo "!CURRENT_REPO!" ^
+    -ResultFile "%LOCAL_SELECTOR_RESULT%"
+
+if not exist "%LOCAL_SELECTOR_RESULT%" goto start
+
+REM Read action from result file
+set "local_sel_action="
+set "local_sel_arg="
+for /f "usebackq tokens=1,* delims=|" %%a in ("%LOCAL_SELECTOR_RESULT%") do (
+    if not defined local_sel_action (
+        set "local_sel_action=%%a"
+        set "local_sel_arg=%%b"
+    )
+)
+REM Guard: filter out CTX= line that has no '|' and could leak as action
+echo !local_sel_action! | findstr /b "CTX=" >nul && (
+    set "local_sel_action="
+    set "local_sel_arg="
+)
+
+REM Persist any context change the user made inside the selector
+for /f "usebackq tokens=1,2 delims==" %%a in ("%LOCAL_SELECTOR_RESULT%") do (
+    if /i "%%a"=="CTX" (
+        if not "%%b"=="!CONTEXT_LENGTH!" (
+            call :apply_context_result "%%b"
+        )
+    )
+)
+
+if /i "!local_sel_action!"=="SELECT" (
+    set "selected_model=!local_sel_arg!"
+    goto run_local_model
+)
+if /i "!local_sel_action!"=="CMD" (
+    if /i "!local_sel_arg!"=="U" goto fetch_list
+    if /i "!local_sel_arg!"=="E" (
+        set "REPO_RETURN=main"
+        goto handle_repository
+    )
+    if /i "!local_sel_arg!"=="R" goto remove_model
+    if /i "!local_sel_arg!"=="L" goto launch_ollama
+    if /i "!local_sel_arg!"=="X" goto cleanup
+)
+goto start
+
+REM ---------------------------------------------------------------
+REM  Legacy fallback (used when local_selector.ps1 is missing)
+REM ---------------------------------------------------------------
+:legacy_local_prompt
 echo Fetching available Ollama models...
 echo   0. Update/Pull a new model
 echo.
-set "LOCAL_MODELS_LIST=%TEMP%\ollama-local-list.txt"REM Use PowerShell script to list, parse, and display local models with details
 powershell -ExecutionPolicy Bypass -File "%FETCH_MODELS_SCRIPT%" -Local -CacheFile "%LOCAL_MODELS_LIST%"
 
 if %errorlevel% neq 0 (
@@ -178,33 +245,27 @@ if %errorlevel% neq 0 (
     echo No local models found. You can browse and install models from the Ollama library.
     echo.
     set /p continue="Would you like to browse available models? (Y/N): "
-    if /i "!continue!"=="Y" (
-        goto fetch_list
-    ) else if /i "!continue!"=="0" (
-        goto fetch_list
-    ) else (
-        echo.
-        echo Exiting. Run 'ollama pull model:tag' to install a model, then try again.
-        pause
-        goto cleanup
-    )
+    if /i "!continue!"=="Y" goto fetch_list
+    if /i "!continue!"=="0" goto fetch_list
+    echo.
+    echo Exiting. Run 'ollama pull model:tag' to install a model, then try again.
+    pause
+    goto cleanup
 )
 
-REM Read the models into the batch array
 set count=0
 for /f "usebackq delims=" %%a in ("%LOCAL_MODELS_LIST%") do (
     set /a count+=1
     set "model[!count!]=%%a"
 )
 
-echo. 
+echo.
 echo [0/U] Update/Pull a new Model   [E] Repository (!CURRENT_REPO!)   [R] Remove a model   [L] Exit CLI ^& Start Ollama.exe   [X] Exit
 echo.
-:prompt
+:legacy_local_input
 set "choice="
 set /p choice="Enter the number or model name for the model you want to use (r to remove, or 0 / u to pull a new one): "
 
-REM Strip trailing period if present
 if "%choice:~-1%"=="." set "choice=%choice:~0,-1%"
 
 if /i "%choice%"=="x" goto cleanup
@@ -213,24 +274,17 @@ if /i "%choice%"=="R" goto remove_model
 if /i "%choice%"=="L" goto launch_ollama
 if /i "%choice%"=="u" goto fetch_list
 if /i "%choice%"=="e" goto main_repository
-if "%choice%"=="" goto invalid
+if "%choice%"=="" goto legacy_local_input
 
-REM Validate user input: check if numeric
 set "is_numeric=true"
 for /f "delims=0123456789" %%a in ("%choice%") do set "is_numeric=false"
 
 if "%is_numeric%"=="true" (
-    REM User entered a number
-    if %choice% LSS 0 goto invalid
-    if %choice% GTR %count% goto invalid
-    
-    REM Option 0: Browse/fetch new models
+    if %choice% LSS 0 goto legacy_local_invalid
+    if %choice% GTR %count% goto legacy_local_invalid
     if "%choice%"=="0" goto fetch_list
-    
-    REM Get the model name by index
     set "selected_model=!model[%choice%]!"
 ) else (
-    REM User entered a model name directly - validate it exists
     set "model_found=false"
     for /L %%i in (1,1,!count!) do (
         if /i "!model[%%i]!"=="!choice!" (
@@ -238,55 +292,49 @@ if "%is_numeric%"=="true" (
             set "selected_model=!model[%%i]!"
         )
     )
-    
     if "!model_found!"=="false" (
         echo.
         echo Error: Model '!choice!' not found in the installed models list.
-        echo Please enter a valid model number or name from the list.
         echo.
-        goto prompt
+        goto legacy_local_input
     )
 )
+goto run_local_model
 
-REM Run selected model with Ollama
+:legacy_local_invalid
+echo.
+echo Invalid selection. Please enter a valid number or model name.
+echo.
+timeout /t 2 /nobreak >nul
+goto legacy_local_input
+
+REM ---------------------------------------------------------------
+REM  Run a locally installed model
+REM ---------------------------------------------------------------
+:run_local_model
 echo.
 echo Launching !selected_model!...
 echo.
-REM Note: Timeout of %OLLAMA_RUN_TIMEOUT_SECONDS% seconds can be enforced via firewall rules or job object limits
-REM Users can interrupt with Ctrl+C if needed
 set "OLLAMA_CONTEXT_LENGTH=!CONTEXT_LENGTH!"
 echo Context length: !CONTEXT_LENGTH! tokens
 ollama run "!selected_model!"
 if %errorlevel% neq 0 (
     echo.
     echo Error encountered launching model '!selected_model!'.
-    
-    if "!is_numeric!"=="true" (
-        echo.
-        set /p remove_broken="Would you like to remove this broken model? (Y/N): "
-        if /i "!remove_broken!"=="Y" (
-            echo Removing !selected_model!...
-            ollama rm !selected_model!
-            if !errorlevel! neq 0 (
-                echo Failed to remove model.
-            ) else (
-                echo Model removed successfully.
-            )
+    echo.
+    set /p remove_broken="Would you like to remove this broken model? (Y/N): "
+    if /i "!remove_broken!"=="Y" (
+        echo Removing !selected_model!...
+        ollama rm "!selected_model!"
+        if !errorlevel! neq 0 (
+            echo Failed to remove model.
+        ) else (
+            echo Model removed successfully.
         )
-    ) else (
-        echo.
-        echo The model '!selected_model!' could not be found or failed to run.
-        echo Please check the name and try again.
     )
-    
     echo Returning to menu...
     pause
-    cls
-    goto start
 )
-echo.
-echo Session ended.
-pause
 cls
 goto start
 
@@ -1440,6 +1488,21 @@ if exist "%~dp0context_selector.ps1" (
     if exist "%CONTEXT_SELECTOR_SCRIPT%" (
         echo Updated context_selector.ps1 in AppData.
     )
+)
+
+REM Copy local_selector.ps1 from script directory to %appdata% if available
+if exist "%~dp0local_selector.ps1" (
+    copy /Y "%~dp0local_selector.ps1" "%LOCAL_SELECTOR_SCRIPT%" >nul 2>&1
+    if exist "%LOCAL_SELECTOR_SCRIPT%" (
+        echo Updated local_selector.ps1 in AppData.
+    )
+)
+if not exist "%LOCAL_SELECTOR_SCRIPT%" (
+    echo.
+    echo Warning: 'local_selector.ps1' is missing - main screen colour hints will be disabled.
+    echo Place 'local_selector.ps1' next to this script for the enhanced UI.
+    echo.
+    timeout /t 2 /nobreak >nul
 )
 
 exit /b
