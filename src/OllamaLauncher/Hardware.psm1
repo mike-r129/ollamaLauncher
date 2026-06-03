@@ -40,9 +40,20 @@ function Get-OllamaLauncherHardwareInfo {
         $ramBytes = (Get-CimInstance Win32_ComputerSystem -ErrorAction Stop).TotalPhysicalMemory
         $ramGB = [Math]::Round([double]$ramBytes / 1GB, 1)
     } catch {}
+    if ($ramGB -le 0) {
+        try {
+            $ramBytes = (Get-WmiObject Win32_ComputerSystem -ErrorAction Stop).TotalPhysicalMemory
+            $ramGB = [Math]::Round([double]$ramBytes / 1GB, 1)
+        } catch {}
+    }
 
     $ollamaModels = $env:OLLAMA_MODELS
-    if (-not $ollamaModels) { $ollamaModels = Join-Path $env:USERPROFILE '.ollama\models' }
+    if (-not $ollamaModels) {
+        $profileRoot = $env:USERPROFILE
+        if (-not $profileRoot) { $profileRoot = $HOME }
+        if (-not $profileRoot) { $profileRoot = [System.IO.Path]::GetTempPath() }
+        $ollamaModels = Join-Path $profileRoot '.ollama\models'
+    }
     $diskGB = 0.0
     try {
         $qual = Split-Path -Qualifier $ollamaModels
@@ -52,6 +63,17 @@ function Get-OllamaLauncherHardwareInfo {
             $diskGB = [Math]::Round([double]$drv.Free / 1GB, 1)
         }
     } catch {}
+    if ($diskGB -le 0) {
+        try {
+            $root = [System.IO.Path]::GetPathRoot($ollamaModels)
+            if ($root) {
+                $drive = [System.IO.DriveInfo]::new($root)
+                if ($drive.IsReady) {
+                    $diskGB = [Math]::Round([double]$drive.AvailableFreeSpace / 1GB, 1)
+                }
+            }
+        } catch {}
+    }
 
     [PSCustomObject]@{
         VRAM = [Math]::Round($vramBytes / 1GB, 1)

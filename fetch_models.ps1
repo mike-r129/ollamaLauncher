@@ -28,12 +28,12 @@ if (Test-Path -LiteralPath $PathsModule) {
 
 $ModuleRoot = Join-Path $ScriptRoot 'src\OllamaLauncher'
 foreach ($moduleName in @(
-    'RepositoryParse.psm1',
     'RepositoryConfig.psm1',
     'RepositoryFetch.psm1',
-    'Hardware.psm1',
     'ModelCatalog.psm1',
-    'Cache.psm1'
+    'Cache.psm1',
+    'RepositoryParse.psm1',
+    'Hardware.psm1'
 )) {
     $modulePath = Join-Path $ModuleRoot $moduleName
     if (Test-Path -LiteralPath $modulePath) {

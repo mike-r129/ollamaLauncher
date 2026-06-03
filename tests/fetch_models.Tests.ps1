@@ -251,3 +251,24 @@ Describe 'fetch_models.ps1 -ValidatePull' {
         }
     }
 }
+
+Describe 'fetch_models.ps1 -DetectHardware' {
+    It 'writes a hardware line instead of failing the wrapper import path' {
+        $dir = New-OllamaLauncherTestDirectory
+
+        try {
+            $cacheFile = Join-Path $dir 'hardware.txt'
+            $result = Invoke-FetchModels @('-DetectHardware', '-CacheFile', $cacheFile)
+
+            $result.ExitCode | Should Be 0
+            (Test-Path -LiteralPath $cacheFile) | Should Be $true
+
+            $line = Get-Content -Path $cacheFile -Raw -Encoding UTF8
+            $line | Should Match '^VRAM=\d+(\.\d+)?\|RAM=\d+(\.\d+)?\|DISK=\d+(\.\d+)?\|PATH=.+'
+            $line | Should Not Match '^VRAM=0(\.0)?\|RAM=0(\.0)?\|DISK=0(\.0)?\|'
+        }
+        finally {
+            Remove-OllamaLauncherTestDirectory $dir
+        }
+    }
+}
