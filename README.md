@@ -32,10 +32,16 @@ CLI tool for [Ollama](https://ollama.ai) on Windows.
 3. If Ollama is not installed CLI will download it using curl then the install file will need to be manually installed by the user.
 4. Once Ollama is installed you can close the Ollama GUI chat and press any key in CLI to continue  or re-launch the script ollamaLauncher.bat
 
+### Optional Installed Mode
+Run `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\Install.ps1` to install app files to `%LOCALAPPDATA%\Programs\ollamaLauncher`.
+
+Run `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\Uninstall.ps1` to remove the installed app files. Add `-RemoveUserData` or `-RemoveCache` only when you also want to remove saved settings or generated caches.
+
 ## Associated Files:
 - ollamaLauncher.bat : Compatibility shim that starts `src/OllamaLauncher.ps1`.
 - src/OllamaLauncher.ps1 : Main launcher entrypoint and first-run setup.
 - src/OllamaLauncher/LegacyLauncher.bat : Transitional batch implementation used while menu logic moves to PowerShell.
+- src/OllamaLauncher/Selectors : Interactive selector scripts used by the transitional menu.
 - fetch_models.ps1 : PowerShell script to fetch model lists.
 - config/repos.default.json : Default repository definitions used to create `%APPDATA%\ollamaLauncher\repos.json`.
 - src/OllamaLauncher/Paths.psm1 : Shared path resolver for config and cache locations.
@@ -89,7 +95,7 @@ Enter model number or name to pull:
 
 ## Troubleshooting
 - **"ollama command not found"**: The script will offer to download the installer for you.
-- **"Critical file 'fetch_models.ps1' is missing"**: Ensure `fetch_models.ps1` is in the same directory as `ollamaLauncher.bat` or already exists in `%APPDATA%\ollamaLauncher`. The launcher requires `fetch_models.ps1` to function properly.
+- **"Critical file 'fetch_models.ps1' is missing"**: Ensure the launcher folder includes `fetch_models.ps1` at the app root. The legacy `%APPDATA%\ollamaLauncher` copy is only a fallback during migration.
 - **"Default repository config is missing"**: Ensure `config/repos.default.json` is present in the launcher folder.
 - **"Failed to fetch models"**: Check your internet connection. The script tries to scrape `ollama.com/search`.
 - **Cache Issues**: If the online list seems outdated, use the `[R]` option in the fetch menu to force a refresh.

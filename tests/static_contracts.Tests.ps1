@@ -10,11 +10,29 @@ Describe 'PowerShell script syntax' {
     $scripts = @(
         'src/OllamaLauncher.ps1',
         'fetch_models.ps1',
-        'model_selector.ps1',
-        'local_selector.ps1',
-        'context_selector.ps1',
+        'src/OllamaLauncher/SortCatalog.ps1',
+        'src/OllamaLauncher/ContextValue.ps1',
+        'src/OllamaLauncher/StateValue.ps1',
+        'src/OllamaLauncher/TrustHost.ps1',
+        'scripts/Install.ps1',
+        'scripts/Uninstall.ps1',
+        'scripts/SmokeTest.ps1',
+        'src/OllamaLauncher/Selectors/ModelSelector.ps1',
+        'src/OllamaLauncher/Selectors/LocalSelector.ps1',
+        'src/OllamaLauncher/Selectors/ContextSelector.ps1',
         'ollama_wrapper.ps1',
-        'src/OllamaLauncher/Paths.psm1'
+        'src/OllamaLauncher/Paths.psm1',
+        'src/OllamaLauncher/RepositoryConfig.psm1',
+        'src/OllamaLauncher/RepositoryParse.psm1',
+        'src/OllamaLauncher/RepositoryFetch.psm1',
+        'src/OllamaLauncher/Hardware.psm1',
+        'src/OllamaLauncher/ModelCatalog.psm1',
+        'src/OllamaLauncher/OllamaCli.psm1',
+        'src/OllamaLauncher/Context.psm1',
+        'src/OllamaLauncher/Cache.psm1',
+        'src/OllamaLauncher/Config.psm1',
+        'src/OllamaLauncher/Trust.psm1',
+        'src/OllamaLauncher/Ui.psm1'
     )
 
     foreach ($relativePath in $scripts) {
@@ -69,15 +87,15 @@ Describe 'fetch_models.ps1 public parameter contract' {
 Describe 'selector script parameter contracts' {
     $contracts = @(
         [PSCustomObject]@{
-            File = 'model_selector.ps1'
+            File = 'src/OllamaLauncher/Selectors/ModelSelector.ps1'
             Parameters = @('SortedFile', 'LocalFile', 'Page', 'PerPage', 'TotalPages', 'SelIndex', 'Repo', 'SearchTerm', 'SortInfo', 'HwFilterLabel', 'VramGb', 'RamGb', 'DiskGb', 'ContextLength', 'HasTags', 'ResultFile')
         },
         [PSCustomObject]@{
-            File = 'local_selector.ps1'
+            File = 'src/OllamaLauncher/Selectors/LocalSelector.ps1'
             Parameters = @('LocalFile', 'VramGb', 'RamGb', 'DiskGb', 'ContextLength', 'CurrentRepo', 'ResultFile')
         },
         [PSCustomObject]@{
-            File = 'context_selector.ps1'
+            File = 'src/OllamaLauncher/Selectors/ContextSelector.ps1'
             Parameters = @('CurrentContext', 'ResultFile')
         },
         [PSCustomObject]@{
@@ -115,6 +133,7 @@ Describe 'batch launcher integration contract' {
         $legacyBatchText | Should Match ':start'
         $legacyBatchText | Should Match 'OLLAMA_LAUNCHER_SETUP_DONE'
         $legacyBatchText | Should Match 'OLLAMA_LAUNCHER_APP_ROOT'
+        $legacyBatchText | Should Match 'src\\OllamaLauncher\\Selectors\\ModelSelector\.ps1'
     }
 
     foreach ($switchName in @('ListRepos', 'ListSortFields', 'ValidatePull', 'DetectHardware', 'FetchTags')) {
@@ -130,6 +149,12 @@ Describe 'batch launcher integration contract' {
         $legacyBatchText | Should Match 'ollama_wrapper\.ps1'
     }
 
+    It 'routes state, context, and trust persistence through module bridges' {
+        $legacyBatchText | Should Match 'ContextValue\.ps1'
+        $legacyBatchText | Should Match 'StateValue\.ps1'
+        $legacyBatchText | Should Match 'TrustHost\.ps1'
+    }
+
     It 'uses LocalAppData cache root for generated launcher files' {
         $legacyBatchText | Should Match 'OLLAMA_LAUNCHER_CACHE_DIR'
         $legacyBatchText | Should Match 'MODELS_CACHE=%CACHE_OLLAMA%\\ollama-models-'
@@ -142,6 +167,21 @@ Describe 'batch launcher integration contract' {
     }
 }
 
+Describe 'ollama wrapper module integration' {
+    $wrapperText = Get-RepoFileText 'ollama_wrapper.ps1'
+
+    It 'uses launcher cache paths for redirected command output' {
+        $wrapperText | Should Match 'Get-OllamaLauncherCacheDirectory'
+        $wrapperText | Should Match 'Get-LauncherCacheFile'
+        $wrapperText | Should Not Match '\$env:TEMP\\ollama_'
+    }
+
+    It 'delegates process launch to OllamaCli when available' {
+        $wrapperText | Should Match 'OllamaCli\.psm1'
+        $wrapperText | Should Match 'Start-OllamaCommandProcess'
+    }
+}
+
 Describe 'default repository config artifact' {
     It 'is valid JSON with the expected default repositories' {
         $configPath = Join-Path $RepoRoot 'config/repos.default.json'
@@ -150,5 +190,13 @@ Describe 'default repository config artifact' {
         $repos = @(Get-Content -Path $configPath -Raw -Encoding UTF8 | ConvertFrom-Json)
         ($repos.name -contains 'Ollama') | Should Be $true
         ($repos.name -contains 'HuggingFace') | Should Be $true
+    }
+}
+
+Describe 'release hygiene artifacts' {
+    It 'includes installer, uninstaller, smoke test, and release checklist' {
+        foreach ($relativePath in @('scripts/Install.ps1', 'scripts/Uninstall.ps1', 'scripts/SmokeTest.ps1', 'RELEASE_CHECKLIST.md')) {
+            (Test-Path -LiteralPath (Join-Path $RepoRoot $relativePath)) | Should Be $true
+        }
     }
 }

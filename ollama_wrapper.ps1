@@ -11,6 +11,17 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+$ScriptRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
+if (-not $ScriptRoot) { $ScriptRoot = (Get-Location).Path }
+
+$ModuleRoot = Join-Path $ScriptRoot 'src\OllamaLauncher'
+foreach ($moduleName in @('Paths.psm1', 'Cache.psm1', 'OllamaCli.psm1')) {
+    $modulePath = Join-Path $ModuleRoot $moduleName
+    if (Test-Path -LiteralPath $modulePath) {
+        Import-Module $modulePath -Force -DisableNameChecking
+    }
+}
+
 if ($ContextLength -gt 0) {
     $env:OLLAMA_CONTEXT_LENGTH = $ContextLength.ToString()
 }
@@ -19,6 +30,60 @@ if ($ContextLength -gt 0) {
 $script:tokensPerSec = 0
 $script:totalTokens = 0
 $script:totalTime = 0
+
+function Get-WrapperCacheDirectory {
+    if (Get-Command Get-OllamaLauncherCacheDirectory -ErrorAction SilentlyContinue) {
+        return Get-OllamaLauncherCacheDirectory
+    }
+    if ($env:OLLAMA_LAUNCHER_CACHE_DIR) {
+        return [System.IO.Path]::GetFullPath($env:OLLAMA_LAUNCHER_CACHE_DIR)
+    }
+    return Join-Path ([System.IO.Path]::GetTempPath()) 'ollamaLauncher'
+}
+
+function New-WrapperOutputPath {
+    param([Parameter(Mandatory=$true)][string]$Name)
+
+    $cacheDirectory = Get-WrapperCacheDirectory
+    if (Get-Command Get-LauncherCacheFile -ErrorAction SilentlyContinue) {
+        $path = Get-LauncherCacheFile -CacheDirectory $cacheDirectory -Name $Name
+    } else {
+        $path = Join-Path $cacheDirectory $Name
+    }
+
+    $dir = Split-Path -Parent $path
+    if ($dir -and -not (Test-Path -LiteralPath $dir)) {
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    }
+    return $path
+}
+
+function Start-WrapperOllamaProcess {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string[]]$Arguments,
+        [Parameter(Mandatory=$true)]
+        [string]$StandardOutputPath,
+        [Parameter(Mandatory=$true)]
+        [string]$StandardErrorPath
+    )
+
+    if (Get-Command Start-OllamaCommandProcess -ErrorAction SilentlyContinue) {
+        return Start-OllamaCommandProcess -ArgumentList $Arguments -StandardOutputPath $StandardOutputPath -StandardErrorPath $StandardErrorPath
+    }
+
+    return Start-Process -FilePath 'ollama' `
+        -ArgumentList $Arguments `
+        -NoNewWindow `
+        -PassThru `
+        -RedirectStandardOutput $StandardOutputPath `
+        -RedirectStandardError $StandardErrorPath
+}
+
+$PullOutputPath = New-WrapperOutputPath 'ollama_output.txt'
+$PullErrorPath = New-WrapperOutputPath 'ollama_error.txt'
+$RunOutputPath = New-WrapperOutputPath 'ollama_run_output.txt'
+$RunErrorPath = New-WrapperOutputPath 'ollama_run_error.txt'
 
 function Format-TopRight([string]$text, [string]$color = "Cyan") {
     try {
@@ -56,14 +121,14 @@ try {
     if ($Pull -and $ModelName) {
         # Running: ollama pull modelname
         Write-Host "Pulling model: $ModelName`n"
-        $process = Start-Process -FilePath "ollama" -ArgumentList "pull", $ModelName -NoNewWindow -PassThru -RedirectStandardOutput $env:TEMP\ollama_output.txt -RedirectStandardError $env:TEMP\ollama_error.txt
+        $process = Start-WrapperOllamaProcess -Arguments @('pull', $ModelName) -StandardOutputPath $PullOutputPath -StandardErrorPath $PullErrorPath
         
         $lastDisplayTime = [DateTime]::MinValue
         while (-not $process.HasExited) {
             $now = [DateTime]::Now
             if (($now - $lastDisplayTime).TotalMilliseconds -gt 500) {
-                if (Test-Path $env:TEMP\ollama_output.txt) {
-                    $lastLine = Get-Content $env:TEMP\ollama_output.txt | Select-Object -Last 1
+                if (Test-Path $PullOutputPath) {
+                    $lastLine = Get-Content $PullOutputPath | Select-Object -Last 1
                     if ($lastLine -and (Parse-OllamaMetrics $lastLine)) {
                         Format-TopRight "tok/s: $('{0:F1}' -f $script:tokensPerSec)" "Cyan"
                     }
@@ -74,8 +139,8 @@ try {
         }
         
         # Show final output
-        if (Test-Path $env:TEMP\ollama_output.txt) {
-            Get-Content $env:TEMP\ollama_output.txt | ForEach-Object {
+        if (Test-Path $PullOutputPath) {
+            Get-Content $PullOutputPath | ForEach-Object {
                 Write-Host $_
                 Parse-OllamaMetrics $_
             }
@@ -95,7 +160,7 @@ try {
             Write-Host "Running model: $ModelName`n"
         }
         
-        $process = Start-Process -FilePath "ollama" -ArgumentList "run", $ModelName -NoNewWindow -PassThru -RedirectStandardOutput $env:TEMP\ollama_run_output.txt -RedirectStandardError $env:TEMP\ollama_run_error.txt
+        $process = Start-WrapperOllamaProcess -Arguments @('run', $ModelName) -StandardOutputPath $RunOutputPath -StandardErrorPath $RunErrorPath
         
         # Monitor output while running
         $lastPos = 0
@@ -104,8 +169,8 @@ try {
         while (-not $process.HasExited) {
             $now = [DateTime]::Now
             if (($now - $lastDisplayTime).TotalMilliseconds -gt 200) {
-                if (Test-Path $env:TEMP\ollama_run_output.txt) {
-                    $content = Get-Content $env:TEMP\ollama_run_output.txt
+                if (Test-Path $RunOutputPath) {
+                    $content = Get-Content $RunOutputPath
                     $lines = @($content)
                     
                     foreach ($line in $lines) {
@@ -122,8 +187,8 @@ try {
         }
         
         # Display final metrics
-        if (Test-Path $env:TEMP\ollama_run_output.txt) {
-            $finalContent = Get-Content $env:TEMP\ollama_run_output.txt -Raw
+        if (Test-Path $RunOutputPath) {
+            $finalContent = Get-Content $RunOutputPath -Raw
             Write-Host $finalContent
             
             # Extract final metrics
@@ -145,8 +210,8 @@ catch {
 }
 finally {
     # Cleanup temp files
-    Remove-Item -Path $env:TEMP\ollama_output.txt -ErrorAction SilentlyContinue
-    Remove-Item -Path $env:TEMP\ollama_error.txt -ErrorAction SilentlyContinue
-    Remove-Item -Path $env:TEMP\ollama_run_output.txt -ErrorAction SilentlyContinue
-    Remove-Item -Path $env:TEMP\ollama_run_error.txt -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $PullOutputPath -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $PullErrorPath -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $RunOutputPath -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $RunErrorPath -ErrorAction SilentlyContinue
 }

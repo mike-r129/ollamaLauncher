@@ -194,7 +194,7 @@ set "LOCAL_MODELS_LIST=%CACHE_OLLAMA%\ollama-local-list.txt"
 if exist "%LOCAL_SELECTOR_RESULT%" del "%LOCAL_SELECTOR_RESULT%" >nul 2>&1
 
 set "ACTIVE_LOCAL_SELECTOR=%LOCAL_SELECTOR_SCRIPT%"
-if exist "%APP_ROOT%\local_selector.ps1" set "ACTIVE_LOCAL_SELECTOR=%APP_ROOT%\local_selector.ps1"
+if exist "%APP_ROOT%\src\OllamaLauncher\Selectors\LocalSelector.ps1" set "ACTIVE_LOCAL_SELECTOR=%APP_ROOT%\src\OllamaLauncher\Selectors\LocalSelector.ps1"
 
 if not exist "!ACTIVE_LOCAL_SELECTOR!" goto legacy_local_prompt
 
@@ -553,7 +553,7 @@ REM Pass context via env var to avoid PowerShell parameter binding issues
 set "OLLAMA_LAUNCHER_CTX=!CONTEXT_LENGTH!"
 
 set "ACTIVE_SELECTOR_SCRIPT=%SELECTOR_SCRIPT%"
-if exist "%APP_ROOT%\model_selector.ps1" set "ACTIVE_SELECTOR_SCRIPT=%APP_ROOT%\model_selector.ps1"
+if exist "%APP_ROOT%\src\OllamaLauncher\Selectors\ModelSelector.ps1" set "ACTIVE_SELECTOR_SCRIPT=%APP_ROOT%\src\OllamaLauncher\Selectors\ModelSelector.ps1"
 
 REM Fallback to legacy prompt if the selector script is missing
 if not exist "!ACTIVE_SELECTOR_SCRIPT!" goto legacy_prompt
@@ -825,7 +825,7 @@ goto show_models_page
 if exist "%CONTEXT_SELECTOR_RESULT%" del "%CONTEXT_SELECTOR_RESULT%" >nul 2>&1
 set "ctx_result="
 set "ACTIVE_CONTEXT_SELECTOR=%CONTEXT_SELECTOR_SCRIPT%"
-if exist "%APP_ROOT%\context_selector.ps1" set "ACTIVE_CONTEXT_SELECTOR=%APP_ROOT%\context_selector.ps1"
+if exist "%APP_ROOT%\src\OllamaLauncher\Selectors\ContextSelector.ps1" set "ACTIVE_CONTEXT_SELECTOR=%APP_ROOT%\src\OllamaLauncher\Selectors\ContextSelector.ps1"
 
 REM Try PowerShell context selector first
 if not exist "!ACTIVE_CONTEXT_SELECTOR!" goto context_basic_menu
@@ -945,9 +945,11 @@ set "TAGS_SORTED=%CACHE_OLLAMA%\ollama-tags-sorted-!tag_base_safe!.txt"
 if exist "!TAGS_SORTED!" del "!TAGS_SORTED!" >nul 2>&1
 
 REM Apply the user's current sort mode to tags
-set "SORT_FIELD_REGEX_ENV=!SORT_FIELD_REGEX!"
-set "SORT_FIELD_NUMERIC_ENV=!SORT_FIELD_NUMERIC!"
-powershell -NoProfile -Command "$s='!TAGS_CACHE!'; $d='!TAGS_SORTED!'; $m='!SORT_MODE!'; $desc=('!SORT_DESC!' -eq '1'); $vram=0.0;[double]::TryParse($env:HW_VRAM,[ref]$vram)|Out-Null; $ram=0.0;[double]::TryParse($env:HW_RAM,[ref]$ram)|Out-Null; $disk=0.0;[double]::TryParse($env:HW_DISK,[ref]$disk)|Out-Null; $ctx=4096;[int]::TryParse($env:OLLAMA_LAUNCHER_CTX,[ref]$ctx)|Out-Null; $GetFitTier={param($sz);if($sz -lt 0){return 3};$eff=$sz*(1+($ctx/50000.0));if($disk -gt 0 -and $eff -gt $disk){return 2};if($vram -gt 0 -and $eff -le $vram){return 0};if($eff -le ($vram+$ram)){return 1};return 2}; $GetSize={if($args[0] -match '([\d\.]+)\s*GB'){return [double]$matches[1]}elseif($args[0] -match '([\d\.]+)\s*MB'){return [double]$matches[1]/1024}elseif($args[0] -match '<\s*1'){return 0.1}else{return -1}}; $data=Import-Csv $s -Delimiter '|' -Header 'Name','Size','Params','Description' -Encoding UTF8; if($m -eq 'SIZE'){$data=$data | Sort-Object -Property @{Expression={if($_.Size -match '([\d\.]+) GB'){[double]$matches[1]}elseif($_.Size -match '([\d\.]+) MB'){[double]$matches[1]/1024}elseif($_.Size -match '< 1'){0.1}else{-1}}} -Descending:$desc}; if($m -eq 'BEST'){$g=@($data|Where-Object{$sz=&$GetSize $_.Size;(&$GetFitTier $sz)-eq 0}|Sort-Object{&$GetSize $_.Size} -Descending);$y=@($data|Where-Object{$sz=&$GetSize $_.Size;(&$GetFitTier $sz)-eq 1}|Sort-Object{&$GetSize $_.Size});$r=@($data|Where-Object{$sz=&$GetSize $_.Size;(&$GetFitTier $sz)-eq 2}|Sort-Object{&$GetSize $_.Size});$u=@($data|Where-Object{$sz=&$GetSize $_.Size;(&$GetFitTier $sz)-eq 3});$data=@($g)+@($y)+@($r)+@($u)}; $output=@($data | ForEach-Object { $_.Name+'|'+$_.Size+'|'+$_.Params+'|'+$_.Description }); if($output.Count -gt 0){[System.IO.File]::WriteAllLines($d, $output)}else{Set-Content -Path $d -Value '' -Encoding UTF8}"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%APP_ROOT%\src\OllamaLauncher\SortCatalog.ps1" ^
+    -SourcePath "!TAGS_CACHE!" -DestinationPath "!TAGS_SORTED!" ^
+    -Mode "!SORT_MODE!" -DescendingValue "!SORT_DESC!" ^
+    -VramGb "!VRAM_GB!" -RamGb "!RAM_GB!" -DiskGb "!DISK_GB!" ^
+    -ContextLength "!CONTEXT_LENGTH!" -TagRows
 
 for /f "usebackq tokens=1,2,3* delims=|" %%a in ("!TAGS_SORTED!") do (
     if "%%a" neq "" (
@@ -985,7 +987,7 @@ if "!TAG_SORT_MODE!"=="BEST" (
 if exist "%SELECTOR_RESULT%" del "%SELECTOR_RESULT%" >nul 2>&1
 
 set "ACTIVE_SELECTOR_SCRIPT=%SELECTOR_SCRIPT%"
-if exist "%APP_ROOT%\model_selector.ps1" set "ACTIVE_SELECTOR_SCRIPT=%APP_ROOT%\model_selector.ps1"
+if exist "%APP_ROOT%\src\OllamaLauncher\Selectors\ModelSelector.ps1" set "ACTIVE_SELECTOR_SCRIPT=%APP_ROOT%\src\OllamaLauncher\Selectors\ModelSelector.ps1"
 
 powershell -NoProfile -ExecutionPolicy Bypass -File "!ACTIVE_SELECTOR_SCRIPT!" ^
     -SortedFile "!TAGS_SORTED!" -LocalFile "%LOCAL_MODELS_LIST%" ^
@@ -1087,9 +1089,12 @@ goto apply_tag_sort
 
 :apply_tag_sort
 REM Apply sort to tags with search filter
-set "SORT_FIELD_REGEX_ENV=!SORT_FIELD_REGEX!"
-set "SORT_FIELD_NUMERIC_ENV=!SORT_FIELD_NUMERIC!"
-powershell -NoProfile -Command "$s='!TAGS_CACHE!'; $d='!TAGS_SORTED!'; $m='!TAG_SORT_MODE!'; $desc=('!TAG_SORT_DESC!' -eq '1'); $q='!TAG_SEARCH_TERM!'; $vram=0.0;[double]::TryParse($env:HW_VRAM,[ref]$vram)|Out-Null; $ram=0.0;[double]::TryParse($env:HW_RAM,[ref]$ram)|Out-Null; $disk=0.0;[double]::TryParse($env:HW_DISK,[ref]$disk)|Out-Null; $ctx=4096;[int]::TryParse($env:OLLAMA_LAUNCHER_CTX,[ref]$ctx)|Out-Null; $GetFitTier={param($sz);if($sz -lt 0){return 3};$eff=$sz*(1+($ctx/50000.0));if($disk -gt 0 -and $eff -gt $disk){return 2};if($vram -gt 0 -and $eff -le $vram){return 0};if($eff -le ($vram+$ram)){return 1};return 2}; $GetSize={if($args[0] -match '([\d\.]+)\s*GB'){return [double]$matches[1]}elseif($args[0] -match '([\d\.]+)\s*MB'){return [double]$matches[1]/1024}elseif($args[0] -match '<\s*1'){return 0.1}else{return -1}}; $data=Import-Csv $s -Delimiter '|' -Header 'Name','Size','Params','Description' -Encoding UTF8; if($q){$data=$data | Where-Object {$_.Name -like '*'+$q+'*'}}; if($m -eq 'SIZE'){$data=$data | Sort-Object -Property @{Expression={if($_.Size -match '([\d\.]+) GB'){[double]$matches[1]}elseif($_.Size -match '([\d\.]+) MB'){[double]$matches[1]/1024}elseif($_.Size -match '< 1'){0.1}else{-1}}} -Descending:$desc}; if($m -eq 'BEST'){$g=@($data|Where-Object{$sz=&$GetSize $_.Size;(&$GetFitTier $sz)-eq 0}|Sort-Object{&$GetSize $_.Size} -Descending);$y=@($data|Where-Object{$sz=&$GetSize $_.Size;(&$GetFitTier $sz)-eq 1}|Sort-Object{&$GetSize $_.Size});$r=@($data|Where-Object{$sz=&$GetSize $_.Size;(&$GetFitTier $sz)-eq 2}|Sort-Object{&$GetSize $_.Size});$u=@($data|Where-Object{$sz=&$GetSize $_.Size;(&$GetFitTier $sz)-eq 3});$data=@($g)+@($y)+@($r)+@($u)}; $output=@($data | ForEach-Object { $_.Name+'|'+$_.Size+'|'+$_.Params+'|'+$_.Description }); if($output.Count -gt 0){[System.IO.File]::WriteAllLines($d, $output)}else{Set-Content -Path $d -Value '' -Encoding UTF8}"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%APP_ROOT%\src\OllamaLauncher\SortCatalog.ps1" ^
+    -SourcePath "!TAGS_CACHE!" -DestinationPath "!TAGS_SORTED!" ^
+    -Mode "!TAG_SORT_MODE!" -DescendingValue "!TAG_SORT_DESC!" ^
+    -SearchTerm "!TAG_SEARCH_TERM!" ^
+    -VramGb "!VRAM_GB!" -RamGb "!RAM_GB!" -DiskGb "!DISK_GB!" ^
+    -ContextLength "!CONTEXT_LENGTH!" -TagRows
 goto show_tags_page
 
 :process_tag_selection
@@ -1381,14 +1386,29 @@ if "!CURRENT_SORT!"=="DEFAULT" if "!SEARCH_TERM!"=="" if not "!HW_FILTER!"=="1" 
 if "!DO_COPY!"=="1" (
     copy /Y "%MODELS_CACHE%" "%MODELS_SORTED%" >nul
 ) else (
-    set "SORT_FIELD_REGEX_ENV=!SORT_FIELD_REGEX!"
-    set "SORT_FIELD_NUMERIC_ENV=!SORT_FIELD_NUMERIC!"
-    powershell -NoProfile -Command "$s='%MODELS_CACHE%'; $d='%MODELS_SORTED%'; $m='!CURRENT_SORT!'; $desc=('!SORT_DESC!' -eq '1'); $q=$env:SEARCH_TERM; $rx=$env:SORT_FIELD_REGEX_ENV; $num=($env:SORT_FIELD_NUMERIC_ENV -eq '1'); $hf=($env:HW_FILTER -eq '1'); $vram=0.0;[double]::TryParse($env:HW_VRAM,[ref]$vram)|Out-Null; $ram=0.0;[double]::TryParse($env:HW_RAM,[ref]$ram)|Out-Null; $disk=0.0;[double]::TryParse($env:HW_DISK,[ref]$disk)|Out-Null; $ctx=4096;[int]::TryParse($env:OLLAMA_LAUNCHER_CTX,[ref]$ctx)|Out-Null; $GetFitTier={param($sz);if($sz -lt 0){return 3};$eff=$sz*(1+($ctx/50000.0));if($disk -gt 0 -and $eff -gt $disk){return 2};if($vram -gt 0 -and $eff -le $vram){return 0};if($eff -le ($vram+$ram)){return 1};return 2}; $GetSize={if($args[0] -match '([\d\.]+)\s*GB'){return [double]$matches[1]}elseif($args[0] -match '<\s*1'){return 0.1}else{return -1}}; $data=Import-Csv $s -Delimiter '|' -Header 'Name','Size','Params','TagCount','Description' -Encoding UTF8; if($q){$data=$data | Where-Object {$_.Name -like '*'+$q+'*'}}; if($hf){ $data=$data | Where-Object { $sz=-1.0; if($_.Size -match '([\d\.]+)\s*GB'){$sz=[double]$matches[1]} elseif($_.Size -match '<\s*1'){$sz=0.5}; if($sz -lt 0){return $true}; $need=$sz; if($disk -gt 0 -and $sz -gt $disk){return $false}; if($need -le ($vram+$ram)){return $true}; return $false } }; if($m -eq 'SIZE'){$data=$data | Sort-Object -Property @{Expression={if($_.Size -match '([\d\.]+) GB'){[double]$matches[1]}elseif($_.Size -match '< 1 GB'){0.1}else{-1}}} -Descending:$desc}; if($m -eq 'BEST'){$g=@($data|Where-Object{$sz=&$GetSize $_.Size;(&$GetFitTier $sz)-eq 0}|Sort-Object{&$GetSize $_.Size} -Descending);$y=@($data|Where-Object{$sz=&$GetSize $_.Size;(&$GetFitTier $sz)-eq 1}|Sort-Object{&$GetSize $_.Size});$r=@($data|Where-Object{$sz=&$GetSize $_.Size;(&$GetFitTier $sz)-eq 2}|Sort-Object{&$GetSize $_.Size});$u=@($data|Where-Object{$sz=&$GetSize $_.Size;(&$GetFitTier $sz)-eq 3});$data=@($g)+@($y)+@($r)+@($u)}; if($m -eq 'FIELD' -and $rx){$data=$data | Sort-Object -Property @{Expression={ $v=$null; if($_.Description -match $rx){ $v=$matches[1] }; if($num){ if($v){ try{[double]$v}catch{-1} } else { -1 } } else { if($v){ $v } else { '' } } }} -Descending:$desc}; $output=@($data | ForEach-Object { $_.Name+'|'+$_.Size+'|'+$_.Params+'|'+$_.TagCount+'|'+$_.Description }); if($output.Count -gt 0){[System.IO.File]::WriteAllLines($d, $output)}else{Set-Content -Path $d -Value '' -Encoding UTF8}"
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%APP_ROOT%\src\OllamaLauncher\SortCatalog.ps1" ^
+        -SourcePath "%MODELS_CACHE%" -DestinationPath "%MODELS_SORTED%" ^
+        -Mode "!CURRENT_SORT!" -DescendingValue "!SORT_DESC!" ^
+        -SearchTerm "!SEARCH_TERM!" ^
+        -FieldRegex "!SORT_FIELD_REGEX!" -FieldNumericValue "!SORT_FIELD_NUMERIC!" ^
+        -HardwareFilterValue "!HW_FILTER!" ^
+        -VramGb "!VRAM_GB!" -RamGb "!RAM_GB!" -DiskGb "!DISK_GB!" ^
+        -ContextLength "!CONTEXT_LENGTH!"
 )
 call :load_models
 exit /b
 
 :load_context_length
+set "ctx_from_module="
+if exist "%APP_ROOT%\src\OllamaLauncher\ContextValue.ps1" (
+    for /f "usebackq delims=" %%a in (`powershell -NoProfile -ExecutionPolicy Bypass -File "%APP_ROOT%\src\OllamaLauncher\ContextValue.ps1" -Path "%CONTEXT_FILE%" -Default 4096`) do (
+        if not defined ctx_from_module set "ctx_from_module=%%a"
+    )
+    if defined ctx_from_module (
+        set "CONTEXT_LENGTH=!ctx_from_module!"
+        exit /b
+    )
+)
 if exist "%CONTEXT_FILE%" (
     for /f "usebackq delims=" %%a in ("%CONTEXT_FILE%") do (
         set "ctx_temp=%%a"
@@ -1399,6 +1419,11 @@ exit /b
 
 :apply_context_result
 set "new_context=%~1"
+if exist "%APP_ROOT%\src\OllamaLauncher\ContextValue.ps1" (
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%APP_ROOT%\src\OllamaLauncher\ContextValue.ps1" -Path "%CONTEXT_FILE%" -Set -Value "!new_context!" >nul 2>&1
+    if errorlevel 1 goto context_value_invalid
+    goto context_value_valid
+)
 if "!new_context!"=="4096" goto context_value_valid
 if "!new_context!"=="8192" goto context_value_valid
 if "!new_context!"=="16384" goto context_value_valid
@@ -1406,6 +1431,8 @@ if "!new_context!"=="32768" goto context_value_valid
 if "!new_context!"=="65536" goto context_value_valid
 if "!new_context!"=="131072" goto context_value_valid
 if "!new_context!"=="262144" goto context_value_valid
+
+:context_value_invalid
 echo.
 echo Invalid context selection: !new_context!
 timeout /t 1 /nobreak >nul
@@ -1426,6 +1453,10 @@ timeout /t 1 /nobreak >nul
 exit /b
 
 :save_context_length
+if exist "%APP_ROOT%\src\OllamaLauncher\ContextValue.ps1" (
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%APP_ROOT%\src\OllamaLauncher\ContextValue.ps1" -Path "%CONTEXT_FILE%" -Set -Value "!CONTEXT_LENGTH!" >nul 2>&1
+    if not errorlevel 1 exit /b
+)
 > "%CONTEXT_FILE%" echo(!CONTEXT_LENGTH!
 exit /b
 
@@ -1478,7 +1509,7 @@ if exist "%APP_ROOT%\fetch_models.ps1" (
 if not exist "%FETCH_MODELS_SCRIPT%" (
     echo.
     echo Error: Critical file 'fetch_models.ps1' is missing.
-    echo Please download 'fetch_models.ps1' and place it in the same folder as this script.
+    echo Please restore 'fetch_models.ps1' at the launcher app root.
     echo.
     pause
     goto cleanup
@@ -1487,8 +1518,8 @@ exit /b
 
 :create_selector_script
 REM Copy model_selector.ps1 from script directory to %appdata% if available
-if exist "%APP_ROOT%\model_selector.ps1" (
-    copy /Y "%APP_ROOT%\model_selector.ps1" "%SELECTOR_SCRIPT%" >nul 2>&1
+if exist "%APP_ROOT%\src\OllamaLauncher\Selectors\ModelSelector.ps1" (
+    copy /Y "%APP_ROOT%\src\OllamaLauncher\Selectors\ModelSelector.ps1" "%SELECTOR_SCRIPT%" >nul 2>&1
     if exist "%SELECTOR_SCRIPT%" (
         echo Updated model_selector.ps1 in AppData.
     )
@@ -1496,22 +1527,22 @@ if exist "%APP_ROOT%\model_selector.ps1" (
 if not exist "%SELECTOR_SCRIPT%" (
     echo.
     echo Warning: 'model_selector.ps1' is missing - arrow-key navigation will be disabled.
-    echo Place 'model_selector.ps1' next to this script for the enhanced UI.
+    echo Restore src\OllamaLauncher\Selectors\ModelSelector.ps1 for the enhanced UI.
     echo.
     timeout /t 2 /nobreak >nul
 )
 
 REM Copy context_selector.ps1 from script directory to %appdata% if available
-if exist "%APP_ROOT%\context_selector.ps1" (
-    copy /Y "%APP_ROOT%\context_selector.ps1" "%CONTEXT_SELECTOR_SCRIPT%" >nul 2>&1
+if exist "%APP_ROOT%\src\OllamaLauncher\Selectors\ContextSelector.ps1" (
+    copy /Y "%APP_ROOT%\src\OllamaLauncher\Selectors\ContextSelector.ps1" "%CONTEXT_SELECTOR_SCRIPT%" >nul 2>&1
     if exist "%CONTEXT_SELECTOR_SCRIPT%" (
         echo Updated context_selector.ps1 in AppData.
     )
 )
 
 REM Copy local_selector.ps1 from script directory to %appdata% if available
-if exist "%APP_ROOT%\local_selector.ps1" (
-    copy /Y "%APP_ROOT%\local_selector.ps1" "%LOCAL_SELECTOR_SCRIPT%" >nul 2>&1
+if exist "%APP_ROOT%\src\OllamaLauncher\Selectors\LocalSelector.ps1" (
+    copy /Y "%APP_ROOT%\src\OllamaLauncher\Selectors\LocalSelector.ps1" "%LOCAL_SELECTOR_SCRIPT%" >nul 2>&1
     if exist "%LOCAL_SELECTOR_SCRIPT%" (
         echo Updated local_selector.ps1 in AppData.
     )
@@ -1519,7 +1550,7 @@ if exist "%APP_ROOT%\local_selector.ps1" (
 if not exist "%LOCAL_SELECTOR_SCRIPT%" (
     echo.
     echo Warning: 'local_selector.ps1' is missing - main screen colour hints will be disabled.
-    echo Place 'local_selector.ps1' next to this script for the enhanced UI.
+    echo Restore src\OllamaLauncher\Selectors\LocalSelector.ps1 for the enhanced UI.
     echo.
     timeout /t 2 /nobreak >nul
 )
@@ -1688,7 +1719,13 @@ if not exist "%REPOS_CONFIG%" (
     powershell -ExecutionPolicy Bypass -File "%FETCH_MODELS_SCRIPT%" -ListRepos -CacheFile "%REPOS_LIST%" -ConfigFile "%REPOS_CONFIG%" >nul 2>&1
 )
 REM Read previously selected repo, if any
-if exist "%REPO_STATE_FILE%" (
+set "saved_repo="
+if exist "%APP_ROOT%\src\OllamaLauncher\StateValue.ps1" (
+    for /f "usebackq delims=" %%a in (`powershell -NoProfile -ExecutionPolicy Bypass -File "%APP_ROOT%\src\OllamaLauncher\StateValue.ps1" -Path "%REPO_STATE_FILE%" -Default "Ollama"`) do (
+        if not defined saved_repo set "saved_repo=%%a"
+    )
+    if not "!saved_repo!"=="" set "CURRENT_REPO=!saved_repo!"
+) else if exist "%REPO_STATE_FILE%" (
     set /p saved_repo=<"%REPO_STATE_FILE%"
     if not "!saved_repo!"=="" set "CURRENT_REPO=!saved_repo!"
 )
@@ -1719,6 +1756,10 @@ if errorlevel 1 (
 exit /b
 
 :save_repo_state
+if exist "%APP_ROOT%\src\OllamaLauncher\StateValue.ps1" (
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%APP_ROOT%\src\OllamaLauncher\StateValue.ps1" -Path "%REPO_STATE_FILE%" -Set -Value "!CURRENT_REPO!" >nul 2>&1
+    if not errorlevel 1 exit /b
+)
 > "%REPO_STATE_FILE%" echo !CURRENT_REPO!
 exit /b
 
@@ -1728,6 +1769,14 @@ REM Trusted hosts persisted in %TRUSTED_HOSTS_FILE% as a single ;-delimited line
 REM Returns errorlevel 0 if trusted (or no host to check), 1 if user declined.
 if not defined CURRENT_REPO_HOST exit /b 0
 if "!CURRENT_REPO_HOST!"=="" exit /b 0
+if exist "%APP_ROOT%\src\OllamaLauncher\TrustHost.ps1" (
+    set "TRUSTED_HOSTS="
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%APP_ROOT%\src\OllamaLauncher\TrustHost.ps1" -Path "%TRUSTED_HOSTS_FILE%" -HostName "!CURRENT_REPO_HOST!" > "%CACHE_OLLAMA%\trusted_hosts_check.txt" 2>nul
+    if not errorlevel 1 exit /b 0
+    if exist "%CACHE_OLLAMA%\trusted_hosts_check.txt" set /p TRUSTED_HOSTS=<"%CACHE_OLLAMA%\trusted_hosts_check.txt"
+    if "!TRUSTED_HOSTS!"=="" set "TRUSTED_HOSTS=huggingface.co;ollama.com"
+    goto repo_trust_prompt
+)
 if not exist "%TRUSTED_HOSTS_FILE%" (
     > "%TRUSTED_HOSTS_FILE%" echo huggingface.co;ollama.com
 )
@@ -1735,6 +1784,8 @@ set "TRUSTED_HOSTS="
 set /p TRUSTED_HOSTS=<"%TRUSTED_HOSTS_FILE%"
 echo ;!TRUSTED_HOSTS!;| findstr /i /c:";!CURRENT_REPO_HOST!;" >nul
 if %errorlevel% equ 0 exit /b 0
+
+:repo_trust_prompt
 echo.
 echo =================== SECURITY WARNING ===================
 echo Repository "!CURRENT_REPO!" uses an UNTRUSTED host:
@@ -1752,6 +1803,13 @@ set /p trust_choice="Trust this host and continue? (y/N): "
 if /i not "!trust_choice!"=="y" (
     echo Host not trusted. Aborting use of this repository.
     exit /b 1
+)
+if exist "%APP_ROOT%\src\OllamaLauncher\TrustHost.ps1" (
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%APP_ROOT%\src\OllamaLauncher\TrustHost.ps1" -Path "%TRUSTED_HOSTS_FILE%" -HostName "!CURRENT_REPO_HOST!" -Add >nul 2>&1
+    if not errorlevel 1 (
+        echo Host trusted and recorded.
+        exit /b 0
+    )
 )
 > "%TRUSTED_HOSTS_FILE%" echo !TRUSTED_HOSTS!;!CURRENT_REPO_HOST!
 echo Host trusted and recorded.

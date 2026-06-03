@@ -30,10 +30,11 @@ function Resolve-LauncherHelper {
     param(
         [Parameter(Mandatory=$true)]
         [string]$Name,
+        [string]$SourceRelativePath = $Name,
         [switch]$Required
     )
 
-    $sourcePath = Join-Path $AppRoot $Name
+    $sourcePath = Join-Path $AppRoot $SourceRelativePath
     $legacyPath = Join-Path $ConfigDirectory $Name
 
     if (Test-Path -LiteralPath $sourcePath) {
@@ -69,9 +70,9 @@ if (-not (Test-Path -LiteralPath $ReposConfig)) {
 }
 
 $FetchScript = Resolve-LauncherHelper -Name 'fetch_models.ps1' -Required
-$ModelSelectorScript = Resolve-LauncherHelper -Name 'model_selector.ps1'
-$ContextSelectorScript = Resolve-LauncherHelper -Name 'context_selector.ps1'
-$LocalSelectorScript = Resolve-LauncherHelper -Name 'local_selector.ps1'
+$ModelSelectorScript = Resolve-LauncherHelper -Name 'model_selector.ps1' -SourceRelativePath 'src\OllamaLauncher\Selectors\ModelSelector.ps1'
+$ContextSelectorScript = Resolve-LauncherHelper -Name 'context_selector.ps1' -SourceRelativePath 'src\OllamaLauncher\Selectors\ContextSelector.ps1'
+$LocalSelectorScript = Resolve-LauncherHelper -Name 'local_selector.ps1' -SourceRelativePath 'src\OllamaLauncher\Selectors\LocalSelector.ps1'
 
 $env:OLLAMA_LAUNCHER_CONFIG_DIR = $ConfigDirectory
 $env:OLLAMA_LAUNCHER_CACHE_DIR = $CacheDirectory
