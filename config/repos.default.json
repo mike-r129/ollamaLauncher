@@ -1,0 +1,95 @@
+[
+  {
+    "name": "Ollama",
+    "description": "Official Ollama model library (https://ollama.com)",
+    "pullPrefix": "",
+    "defaultLimit": 500,
+    "format": "html",
+    "baseUrl": "https://ollama.com/search",
+    "pagination": {
+      "type": "page",
+      "param": "page",
+      "start": 1,
+      "maxPages": 50
+    },
+    "items": {
+      "regex": "(?s)<li x-test-model(.*?)</li>",
+      "group": 1
+    },
+    "fields": {
+      "name": {
+        "regex": "x-test-search-response-title>([^<]+)<",
+        "decode": "html"
+      },
+      "description": {
+        "regex": "(?s)<p[^>]*text-neutral-800[^>]*>(.*?)</p>"
+      },
+      "variants": {
+        "regex": "x-test-size[^>]*>([^<]+)<",
+        "multi": true
+      }
+    },
+    "expandVariantField": "variants",
+    "variantNameSeparator": ":",
+    "estimateSize": true,
+    "tagFetch": {
+      "type": "ollama-library",
+      "urlTemplate": "https://ollama.com/library/{base}/tags",
+      "countInMainList": true
+    }
+  },
+  {
+    "name": "HuggingFace",
+    "description": "HuggingFace Hub via API (https://huggingface.co)",
+    "pullPrefix": "hf.co/",
+    "defaultLimit": 500,
+    "format": "json",
+    "baseUrl": "https://huggingface.co/api/models",
+    "queryParams": {
+      "filter": "gguf",
+      "sort": "trendingScore",
+      "direction": "-1",
+      "full": "false"
+    },
+    "pagination": {
+      "type": "cursor-link",
+      "pageSizeParam": "limit",
+      "pageSize": 100,
+      "maxPages": 50
+    },
+    "items": {
+      "path": "$"
+    },
+    "fields": {
+      "name": "id",
+      "pipeline": "pipeline_tag",
+      "downloads": "downloads",
+      "likes": "likes"
+    },
+    "descriptionTemplate": "[{pipeline}] Downloads: {downloads}, Likes: {likes}",
+    "paramsFromName": true,
+    "estimateSize": true,
+    "sortFields": [
+      {
+        "name": "Downloads",
+        "extract": "Downloads:\\s*(\\d+)",
+        "numeric": true
+      },
+      {
+        "name": "Likes",
+        "extract": "Likes:\\s*(\\d+)",
+        "numeric": true
+      }
+    ],
+    "tagFetch": {
+      "type": "huggingface-base-model",
+      "countInMainList": false,
+      "sources": [
+        {
+          "label": "gguf-variants",
+          "urlTemplate": "https://huggingface.co/api/models?search={base}&filter=gguf&limit=100&full=false"
+        }
+      ]
+    }
+  }
+]

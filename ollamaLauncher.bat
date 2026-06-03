@@ -14,13 +14,12 @@ REM   - Install models if not present
 REM   - Browse and download new models from the Ollama library
 REM   - Navigate through paginated model listings
 REM   - fetch_models.ps1 to fetch models from Ollama.com
-REM   - ollama-models.txt to cache files for fetched models
+REM   - LocalAppData cache files for fetched models
 REM Associated Files:
 REM   - ollamaLauncher.bat : Main launcher batch file script, run this to use the program.
-REM   - %APPDATA%\ollamaLauncher\fetch_models.ps1 : PowerShell script to fetch model list from Ollama.com, 
-REM     -fetch_models.ps1 gets installed to %APPDATA%\ollamaLauncher\ on first run: 
-REM         -if it is in same directory as ollamaLauncher.bat then copy to %APPDATA%\ollamaLauncher\, 
-REM   - %TEMP%\ollama-models.txt : Cache file storing fetched model list
+REM   - fetch_models.ps1 : PowerShell script to fetch model list from Ollama.com
+REM   - %APPDATA%\ollamaLauncher : user config/state files
+REM   - %LOCALAPPDATA%\ollamaLauncher\Cache : generated cache files
 REM Requirements:
 REM   - Windows OS (Built and tested on Windows 10/11)
 REM   - PowerShell (for fetch_models.ps1 script)
@@ -32,20 +31,24 @@ REM ============================================================================
 setlocal enabledelayedexpansion
 set "OLLAMA_STARTED=0"
 
-REM Use APPDATA for storing fetch_models.ps1 script
+REM Keep app files beside this launcher in portable mode. AppData is for
+REM user config/state; LocalAppData is for generated cache files.
 set "APPDATA_OLLAMA=%APPDATA%\ollamaLauncher"
-set "FETCH_MODELS_SCRIPT=%APPDATA_OLLAMA%\fetch_models.ps1"
+set "CACHE_OLLAMA=%LOCALAPPDATA%\ollamaLauncher\Cache"
+if "%LOCALAPPDATA%"=="" set "CACHE_OLLAMA=%TEMP%\ollamaLauncher\Cache"
+set "FETCH_MODELS_SCRIPT=%~dp0fetch_models.ps1"
+if not exist "%FETCH_MODELS_SCRIPT%" set "FETCH_MODELS_SCRIPT=%APPDATA_OLLAMA%\fetch_models.ps1"
 set "SELECTOR_SCRIPT=%APPDATA_OLLAMA%\model_selector.ps1"
 set "CONTEXT_SELECTOR_SCRIPT=%APPDATA_OLLAMA%\context_selector.ps1"
 set "LOCAL_SELECTOR_SCRIPT=%APPDATA_OLLAMA%\local_selector.ps1"
-set "SELECTOR_RESULT=%TEMP%\ollama-selector-result.txt"
-set "CONTEXT_SELECTOR_RESULT=%TEMP%\ollama-context-result.txt"
-set "LOCAL_SELECTOR_RESULT=%TEMP%\ollama-local-selector-result.txt"
+set "SELECTOR_RESULT=%CACHE_OLLAMA%\ollama-selector-result.txt"
+set "CONTEXT_SELECTOR_RESULT=%CACHE_OLLAMA%\ollama-context-result.txt"
+set "LOCAL_SELECTOR_RESULT=%CACHE_OLLAMA%\ollama-local-selector-result.txt"
 set "REPOS_CONFIG=%APPDATA_OLLAMA%\repos.json"
-set "REPOS_LIST=%APPDATA_OLLAMA%\repos_list.txt"
+set "REPOS_LIST=%CACHE_OLLAMA%\repos_list.txt"
 set "REPO_STATE_FILE=%APPDATA_OLLAMA%\state.txt"
 set "TRUSTED_HOSTS_FILE=%APPDATA_OLLAMA%\trusted_hosts.txt"
-set "HW_CACHE_FILE=%APPDATA_OLLAMA%\hardware.txt"
+set "HW_CACHE_FILE=%CACHE_OLLAMA%\hardware.txt"
 set "CONTEXT_FILE=%APPDATA_OLLAMA%\context.txt"
 
 REM Detected hardware (populated by :detect_hardware on first :start pass)
@@ -66,8 +69,8 @@ set "CURRENT_REPO_PREFIX="
 set "CURRENT_REPO_HOST="
 
 REM Per-repo cache files derived from CURRENT_REPO (set in :load_repo_state)
-set "MODELS_CACHE=%TEMP%\ollama-models-Ollama.txt"
-set "MODELS_SORTED=%TEMP%\ollama-models-sorted-Ollama.txt"
+set "MODELS_CACHE=%CACHE_OLLAMA%\ollama-models-Ollama.txt"
+set "MODELS_SORTED=%CACHE_OLLAMA%\ollama-models-sorted-Ollama.txt"
 
 REM Configurable pagination settings
 set "ITEMS_PER_PAGE=50"
@@ -77,6 +80,7 @@ set "OLLAMA_RUN_TIMEOUT_SECONDS=3600"
 
 REM Create APPDATA directory if it doesn't exist
 if not exist "%APPDATA_OLLAMA%" mkdir "%APPDATA_OLLAMA%"
+if not exist "%CACHE_OLLAMA%" mkdir "%CACHE_OLLAMA%"
 
 REM Create fetch_models.ps1 in APPDATA on first run
 call :create_fetch_script
@@ -171,7 +175,7 @@ if not defined HW_DETECTED (
 REM ---------------------------------------------------------------
 REM  Local model selector - interactive screen with colour-coded fit
 REM ---------------------------------------------------------------
-set "LOCAL_MODELS_LIST=%TEMP%\ollama-local-list.txt"
+set "LOCAL_MODELS_LIST=%CACHE_OLLAMA%\ollama-local-list.txt"
 if exist "%LOCAL_SELECTOR_RESULT%" del "%LOCAL_SELECTOR_RESULT%" >nul 2>&1
 
 set "ACTIVE_LOCAL_SELECTOR=%LOCAL_SELECTOR_SCRIPT%"
@@ -776,7 +780,7 @@ echo.
 if "!HW_FILTER!"=="1" (
     echo Hardware filter is currently: ON
     echo   - Listing every published tag/quant that fits your hardware
-    echo   - Cache: %TEMP%\ollama-models-!CURRENT_REPO!-compat.txt
+    echo   - Cache: %CACHE_OLLAMA%\ollama-models-!CURRENT_REPO!-compat.txt
 ) else (
     echo Hardware filter is currently: OFF ^(showing top base models only^)
 )
@@ -907,7 +911,7 @@ for /f "tokens=1 delims=:" %%a in ("!tag_model_name!") do set "tag_base=%%a"
 REM Sanitize for use in a file name (Ollama model names are [A-Za-z0-9._-]+ but be defensive)
 set "tag_base_safe=!tag_base:/=_!"
 set "tag_base_safe=!tag_base_safe:\=_!"
-set "TAGS_CACHE=%TEMP%\ollama-tags-!tag_base_safe!.txt"
+set "TAGS_CACHE=%CACHE_OLLAMA%\ollama-tags-!tag_base_safe!.txt"
 if exist "!TAGS_CACHE!" del "!TAGS_CACHE!" >nul 2>&1
 
 echo.
@@ -922,7 +926,7 @@ if not exist "!TAGS_CACHE!" (
 
 REM Load tags into arrays and create TAGS_SORTED with applied sort mode
 set "tag_count=0"
-set "TAGS_SORTED=%TEMP%\ollama-tags-sorted-!tag_base_safe!.txt"
+set "TAGS_SORTED=%CACHE_OLLAMA%\ollama-tags-sorted-!tag_base_safe!.txt"
 if exist "!TAGS_SORTED!" del "!TAGS_SORTED!" >nul 2>&1
 
 REM Apply the user's current sort mode to tags
@@ -1123,7 +1127,7 @@ cls
 goto start
 
 :handle_sort_field
-set "SORT_FIELDS_LIST=%APPDATA_OLLAMA%\sort_fields.txt"
+set "SORT_FIELDS_LIST=%CACHE_OLLAMA%\sort_fields.txt"
 powershell -ExecutionPolicy Bypass -File "%FETCH_MODELS_SCRIPT%" -ListSortFields -Repo "!CURRENT_REPO!" -CacheFile "!SORT_FIELDS_LIST!" -ConfigFile "%REPOS_CONFIG%" >nul 2>&1
 if not exist "!SORT_FIELDS_LIST!" (
     echo.
@@ -1446,13 +1450,13 @@ if !errorlevel! neq 0 goto wait_ollama_ready_context
 exit /b
 
 :create_fetch_script
-REM Create the fetch_models.ps1 script - copy from script directory to %appdata% if available
+REM Keep a legacy AppData copy if possible, but run the source-adjacent
+REM script in portable mode and never delete local helper scripts.
 if exist "%~dp0fetch_models.ps1" (
-    copy /Y "%~dp0fetch_models.ps1" "%FETCH_MODELS_SCRIPT%" >nul 2>&1
-    if exist "%FETCH_MODELS_SCRIPT%" (
-        del "%~dp0fetch_models.ps1"
-        echo Moved fetch_models.ps1 to AppData and cleaned up local file.
-        timeout /t 2 /nobreak >nul
+    set "FETCH_MODELS_SCRIPT=%~dp0fetch_models.ps1"
+    copy /Y "%~dp0fetch_models.ps1" "%APPDATA_OLLAMA%\fetch_models.ps1" >nul 2>&1
+    if exist "%APPDATA_OLLAMA%\fetch_models.ps1" (
+        echo Updated legacy fetch_models.ps1 copy in AppData.
     )
 )
 
@@ -1624,11 +1628,11 @@ REM compatible quant/tag variant) so we don't clobber the normal cache.
 set "HW_COMPAT_MODE=0"
 if /i "!CURRENT_REPO!"=="Ollama" if "!HW_FILTER!"=="1" set "HW_COMPAT_MODE=1"
 if "!HW_COMPAT_MODE!"=="1" (
-    set "MODELS_CACHE=%TEMP%\ollama-models-!CURRENT_REPO!-compat.txt"
-    set "MODELS_SORTED=%TEMP%\ollama-models-sorted-!CURRENT_REPO!-compat.txt"
+    set "MODELS_CACHE=%CACHE_OLLAMA%\ollama-models-!CURRENT_REPO!-compat.txt"
+    set "MODELS_SORTED=%CACHE_OLLAMA%\ollama-models-sorted-!CURRENT_REPO!-compat.txt"
 ) else (
-    set "MODELS_CACHE=%TEMP%\ollama-models-!CURRENT_REPO!.txt"
-    set "MODELS_SORTED=%TEMP%\ollama-models-sorted-!CURRENT_REPO!.txt"
+    set "MODELS_CACHE=%CACHE_OLLAMA%\ollama-models-!CURRENT_REPO!.txt"
+    set "MODELS_SORTED=%CACHE_OLLAMA%\ollama-models-sorted-!CURRENT_REPO!.txt"
 )
 exit /b
 

@@ -12,7 +12,8 @@ Describe 'PowerShell script syntax' {
         'model_selector.ps1',
         'local_selector.ps1',
         'context_selector.ps1',
-        'ollama_wrapper.ps1'
+        'ollama_wrapper.ps1',
+        'src/OllamaLauncher/Paths.psm1'
     )
 
     foreach ($relativePath in $scripts) {
@@ -113,5 +114,27 @@ Describe 'batch launcher integration contract' {
 
     It 'routes pull and run commands through ollama_wrapper.ps1' {
         $batchText | Should Match 'ollama_wrapper\.ps1'
+    }
+
+    It 'uses LocalAppData cache root for generated launcher files' {
+        $batchText | Should Match 'CACHE_OLLAMA=%LOCALAPPDATA%\\ollamaLauncher\\Cache'
+        $batchText | Should Match 'MODELS_CACHE=%CACHE_OLLAMA%\\ollama-models-'
+        $batchText | Should Match 'REPOS_LIST=%CACHE_OLLAMA%\\repos_list\.txt'
+    }
+
+    It 'does not delete source-adjacent fetch_models.ps1 during setup' {
+        $batchText | Should Not Match 'del\s+"%~dp0fetch_models\.ps1"'
+        $batchText | Should Match 'FETCH_MODELS_SCRIPT=%~dp0fetch_models\.ps1'
+    }
+}
+
+Describe 'default repository config artifact' {
+    It 'is valid JSON with the expected default repositories' {
+        $configPath = Join-Path $RepoRoot 'config/repos.default.json'
+        (Test-Path -LiteralPath $configPath) | Should Be $true
+
+        $repos = @(Get-Content -Path $configPath -Raw -Encoding UTF8 | ConvertFrom-Json)
+        ($repos.name -contains 'Ollama') | Should Be $true
+        ($repos.name -contains 'HuggingFace') | Should Be $true
     }
 }

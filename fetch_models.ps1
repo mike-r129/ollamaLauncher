@@ -17,6 +17,64 @@ param(
 $ErrorActionPreference='Stop'
 [Console]::OutputEncoding=[System.Text.Encoding]::UTF8
 
+$ScriptRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
+if (-not $ScriptRoot) { $ScriptRoot = (Get-Location).Path }
+$PathsModule = Join-Path $ScriptRoot 'src\OllamaLauncher\Paths.psm1'
+if (Test-Path -LiteralPath $PathsModule) {
+    Import-Module $PathsModule -Force
+}
+
+function Get-LauncherFallbackConfigDirectory {
+    $base = $env:APPDATA
+    if (-not $base) {
+        return Join-Path ([System.IO.Path]::GetTempPath()) 'ollamaLauncher'
+    }
+    return Join-Path $base 'ollamaLauncher'
+}
+
+function Get-LauncherFallbackCacheDirectory {
+    $base = $env:LOCALAPPDATA
+    if (-not $base) {
+        $base = [System.IO.Path]::GetTempPath()
+    }
+    return Join-Path (Join-Path $base 'ollamaLauncher') 'Cache'
+}
+
+function Get-LauncherConfigPath {
+    param([string]$Name)
+
+    if (Get-Command Get-OllamaLauncherConfigPath -ErrorAction SilentlyContinue) {
+        return Get-OllamaLauncherConfigPath -Name $Name
+    }
+    return Join-Path (Get-LauncherFallbackConfigDirectory) $Name
+}
+
+function Get-LauncherCachePath {
+    param([string]$Name)
+
+    if (Get-Command Get-OllamaLauncherCachePath -ErrorAction SilentlyContinue) {
+        return Get-OllamaLauncherCachePath -Name $Name
+    }
+    return Join-Path (Get-LauncherFallbackCacheDirectory) $Name
+}
+
+function Get-LauncherDefaultReposPath {
+    if (Get-Command Get-OllamaLauncherDefaultReposPath -ErrorAction SilentlyContinue) {
+        return Get-OllamaLauncherDefaultReposPath
+    }
+    return Join-Path (Join-Path $ScriptRoot 'config') 'repos.default.json'
+}
+
+function Initialize-ParentDirectory {
+    param([string]$Path)
+
+    if (-not $Path) { return }
+    $dir = Split-Path -Parent $Path
+    if ($dir -and -not (Test-Path -LiteralPath $dir)) {
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    }
+}
+
 # ================================================================
 # repos.json schema (single generic fetcher, no per-site code paths)
 # ----------------------------------------------------------------
@@ -66,68 +124,25 @@ $ErrorActionPreference='Stop'
 # Config bootstrap
 # ----------------------------------------------------------------
 if (-not $ConfigFile) {
-    $ConfigFile = "$env:APPDATA\ollamaLauncher\repos.json"
+    $ConfigFile = Get-LauncherConfigPath 'repos.json'
 }
-$ConfigDir = Split-Path -Parent $ConfigFile
-if (-not (Test-Path $ConfigDir)) { New-Item -ItemType Directory -Path $ConfigDir -Force | Out-Null }
+Initialize-ParentDirectory $ConfigFile
 
 function New-DefaultRepoConfig {
-    @(
-        [PSCustomObject]@{
-            name         = 'Ollama'
-            description  = 'Official Ollama model library (https://ollama.com)'
-            pullPrefix   = ''
-            defaultLimit = 500
-            format       = 'html'
-            baseUrl      = 'https://ollama.com/search'
-            pagination   = [PSCustomObject]@{ type='page'; param='page'; start=1; maxPages=50 }
-            items        = [PSCustomObject]@{ regex='(?s)<li x-test-model(.*?)</li>'; group=1 }
-            fields       = [PSCustomObject]@{
-                name        = [PSCustomObject]@{ regex='x-test-search-response-title>([^<]+)<'; decode='html' }
-                description = [PSCustomObject]@{ regex='(?s)<p[^>]*text-neutral-800[^>]*>(.*?)</p>' }
-                variants    = [PSCustomObject]@{ regex='x-test-size[^>]*>([^<]+)<'; multi=$true }
-            }
-            expandVariantField   = 'variants'
-            variantNameSeparator = ':'
-            estimateSize         = $true
-            tagFetch             = [PSCustomObject]@{
-                type             = 'ollama-library'
-                urlTemplate      = 'https://ollama.com/library/{base}/tags'
-                countInMainList  = $true
-            }
-        },
-        [PSCustomObject]@{
-            name         = 'HuggingFace'
-            description  = 'HuggingFace Hub via API (https://huggingface.co)'
-            pullPrefix   = 'hf.co/'
-            defaultLimit = 500
-            format       = 'json'
-            baseUrl      = 'https://huggingface.co/api/models'
-            queryParams  = [PSCustomObject]@{ filter='gguf'; sort='trendingScore'; direction='-1'; full='false' }
-            pagination   = [PSCustomObject]@{ type='cursor-link'; pageSizeParam='limit'; pageSize=100; maxPages=50 }
-            items        = [PSCustomObject]@{ path='$' }
-            fields       = [PSCustomObject]@{
-                name      = 'id'
-                pipeline  = 'pipeline_tag'
-                downloads = 'downloads'
-                likes     = 'likes'
-            }
-            descriptionTemplate = '[{pipeline}] Downloads: {downloads}, Likes: {likes}'
-            paramsFromName      = $true
-            estimateSize        = $true
-            sortFields          = @(
-                [PSCustomObject]@{ name='Downloads'; extract='Downloads:\s*(\d+)'; numeric=$true },
-                [PSCustomObject]@{ name='Likes';     extract='Likes:\s*(\d+)';     numeric=$true }
-            )
-            tagFetch            = [PSCustomObject]@{
-                type            = 'huggingface-base-model'
-                countInMainList = $false
-                sources         = @(
-                    [PSCustomObject]@{ label='gguf-variants';  urlTemplate='https://huggingface.co/api/models?search={base}&filter=gguf&limit=100&full=false' }
-                )
-            }
-        }
-    )
+    $defaultConfig = Get-LauncherDefaultReposPath
+    if (-not (Test-Path -LiteralPath $defaultConfig)) {
+        Write-Error "Default repository config is missing: $defaultConfig"
+        exit 1
+    }
+
+    try {
+        $defaults = Get-Content -Path $defaultConfig -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($defaults -isnot [System.Array]) { $defaults = @($defaults) }
+        return $defaults
+    } catch {
+        Write-Error "Failed to parse default repository config '$defaultConfig': $_"
+        exit 1
+    }
 }
 
 # Materialize default config if missing
@@ -404,7 +419,8 @@ function Get-RepoTags($repo, [string]$base) {
 }
 # ----------------------------------------------------------------
 if ($ListRepos) {
-    if (-not $CacheFile) { $CacheFile = "$env:APPDATA\ollamaLauncher\repos_list.txt" }
+    if (-not $CacheFile) { $CacheFile = Get-LauncherCachePath 'repos_list.txt' }
+    Initialize-ParentDirectory $CacheFile
     $lines = @()
     foreach ($r in $repos) {
         $fmt  = if ($r.PSObject.Properties['format'])       { $r.format }       else { 'html' }
@@ -437,7 +453,8 @@ if ($ListRepos) {
 if ($ListSortFields) {
     $r = $repos | Where-Object { $_.name -eq $Repo } | Select-Object -First 1
     if (-not $r) { Write-Error "Repository '$Repo' not found."; exit 1 }
-    if (-not $CacheFile) { $CacheFile = "$env:APPDATA\ollamaLauncher\sort_fields.txt" }
+    if (-not $CacheFile) { $CacheFile = Get-LauncherCachePath 'sort_fields.txt' }
+    Initialize-ParentDirectory $CacheFile
     $lines = @()
     if ($r.PSObject.Properties['sortFields'] -and $r.sortFields) {
         foreach ($sf in $r.sortFields) {
@@ -502,7 +519,8 @@ if ($ValidatePull) {
 # Output format: VRAM=<gb>|RAM=<gb>|DISK=<gb>|PATH=<models-dir>
 # ----------------------------------------------------------------
 if ($DetectHardware) {
-    if (-not $CacheFile) { $CacheFile = "$env:APPDATA\ollamaLauncher\hardware.txt" }
+    if (-not $CacheFile) { $CacheFile = Get-LauncherCachePath 'hardware.txt' }
+    Initialize-ParentDirectory $CacheFile
 
     # --- VRAM: prefer nvidia-smi; fall back to WMI; cross-check the
     #     PnP-class registry (Win32_VideoController caps at 4GB on
@@ -568,9 +586,8 @@ if ($DetectHardware) {
 }
 
 
-if (-not $CacheFile) { $CacheFile = "$env:APPDATA\ollamaLauncher\models_cache.txt" }
-$CacheDir = Split-Path -Parent $CacheFile
-if (-not (Test-Path $CacheDir)) { New-Item -ItemType Directory -Path $CacheDir -Force | Out-Null }
+if (-not $CacheFile) { $CacheFile = Get-LauncherCachePath 'models_cache.txt' }
+Initialize-ParentDirectory $CacheFile
 
 # ----------------------------------------------------------------
 # -FetchTags -ModelName X : list every published tag for an Ollama
