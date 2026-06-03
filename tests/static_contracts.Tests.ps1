@@ -8,6 +8,7 @@ function Get-RepoFileText {
 
 Describe 'PowerShell script syntax' {
     $scripts = @(
+        'src/OllamaLauncher.ps1',
         'fetch_models.ps1',
         'model_selector.ps1',
         'local_selector.ps1',
@@ -102,29 +103,42 @@ Describe 'selector script parameter contracts' {
 
 Describe 'batch launcher integration contract' {
     $batchText = Get-RepoFileText 'ollamaLauncher.bat'
+    $legacyBatchText = Get-RepoFileText 'src/OllamaLauncher/LegacyLauncher.bat'
+
+    It 'is a thin shim through the PowerShell entrypoint' {
+        $batchText | Should Match 'src\\OllamaLauncher\.ps1'
+        $batchText | Should Not Match ':start'
+        $batchText | Should Not Match 'fetch_models\.ps1'
+    }
+
+    It 'keeps transitional launcher logic in the legacy batch implementation' {
+        $legacyBatchText | Should Match ':start'
+        $legacyBatchText | Should Match 'OLLAMA_LAUNCHER_SETUP_DONE'
+        $legacyBatchText | Should Match 'OLLAMA_LAUNCHER_APP_ROOT'
+    }
 
     foreach ($switchName in @('ListRepos', 'ListSortFields', 'ValidatePull', 'DetectHardware', 'FetchTags')) {
         $caseSwitch = $switchName
 
         It "routes through fetch_models.ps1 -$caseSwitch" {
             $pattern = '-' + [Regex]::Escape($caseSwitch) + '\b'
-            $batchText | Should Match $pattern
+            $legacyBatchText | Should Match $pattern
         }
     }
 
     It 'routes pull and run commands through ollama_wrapper.ps1' {
-        $batchText | Should Match 'ollama_wrapper\.ps1'
+        $legacyBatchText | Should Match 'ollama_wrapper\.ps1'
     }
 
     It 'uses LocalAppData cache root for generated launcher files' {
-        $batchText | Should Match 'CACHE_OLLAMA=%LOCALAPPDATA%\\ollamaLauncher\\Cache'
-        $batchText | Should Match 'MODELS_CACHE=%CACHE_OLLAMA%\\ollama-models-'
-        $batchText | Should Match 'REPOS_LIST=%CACHE_OLLAMA%\\repos_list\.txt'
+        $legacyBatchText | Should Match 'OLLAMA_LAUNCHER_CACHE_DIR'
+        $legacyBatchText | Should Match 'MODELS_CACHE=%CACHE_OLLAMA%\\ollama-models-'
+        $legacyBatchText | Should Match 'REPOS_LIST=%CACHE_OLLAMA%\\repos_list\.txt'
     }
 
     It 'does not delete source-adjacent fetch_models.ps1 during setup' {
-        $batchText | Should Not Match 'del\s+"%~dp0fetch_models\.ps1"'
-        $batchText | Should Match 'FETCH_MODELS_SCRIPT=%~dp0fetch_models\.ps1'
+        $legacyBatchText | Should Not Match 'del\s+".*fetch_models\.ps1"'
+        $legacyBatchText | Should Match 'FETCH_MODELS_SCRIPT=%APP_ROOT%\\fetch_models\.ps1'
     }
 }
 

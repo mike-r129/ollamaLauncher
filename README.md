@@ -33,7 +33,9 @@ CLI tool for [Ollama](https://ollama.ai) on Windows.
 4. Once Ollama is installed you can close the Ollama GUI chat and press any key in CLI to continue  or re-launch the script ollamaLauncher.bat
 
 ## Associated Files:
-- ollamaLauncher.bat : Main launcher batch file script, run this to use the program.
+- ollamaLauncher.bat : Compatibility shim that starts `src/OllamaLauncher.ps1`.
+- src/OllamaLauncher.ps1 : Main launcher entrypoint and first-run setup.
+- src/OllamaLauncher/LegacyLauncher.bat : Transitional batch implementation used while menu logic moves to PowerShell.
 - fetch_models.ps1 : PowerShell script to fetch model lists.
 - config/repos.default.json : Default repository definitions used to create `%APPDATA%\ollamaLauncher\repos.json`.
 - src/OllamaLauncher/Paths.psm1 : Shared path resolver for config and cache locations.

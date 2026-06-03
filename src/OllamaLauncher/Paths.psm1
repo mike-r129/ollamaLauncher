@@ -14,6 +14,10 @@ function Get-OllamaLauncherConfigDirectory {
     [CmdletBinding()]
     param()
 
+    if ($env:OLLAMA_LAUNCHER_CONFIG_DIR) {
+        return [System.IO.Path]::GetFullPath($env:OLLAMA_LAUNCHER_CONFIG_DIR)
+    }
+
     $base = $env:APPDATA
     if (-not $base) {
         $base = Join-Path ([System.IO.Path]::GetTempPath()) 'ollamaLauncher'
@@ -26,6 +30,10 @@ function Get-OllamaLauncherConfigDirectory {
 function Get-OllamaLauncherCacheDirectory {
     [CmdletBinding()]
     param()
+
+    if ($env:OLLAMA_LAUNCHER_CACHE_DIR) {
+        return [System.IO.Path]::GetFullPath($env:OLLAMA_LAUNCHER_CACHE_DIR)
+    }
 
     $base = $env:LOCALAPPDATA
     if (-not $base) {
