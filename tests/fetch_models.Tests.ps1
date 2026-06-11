@@ -159,6 +159,24 @@ Describe 'fetch_models.ps1 -ListSortFields' {
         }
     }
 
+    It 'writes an empty sort field file for repos without sortFields instead of failing' {
+        $dir = New-OllamaLauncherTestDirectory
+
+        try {
+            $config = Initialize-DefaultRepoConfig $dir
+            $sortFields = Join-Path $dir 'sort_fields.txt'
+
+            $result = Invoke-FetchModels @('-ListSortFields', '-Repo', 'Ollama', '-ConfigFile', $config, '-CacheFile', $sortFields)
+
+            $result.ExitCode | Should Be 0
+            (Test-Path -LiteralPath $sortFields) | Should Be $true
+            (Get-Item -LiteralPath $sortFields).Length | Should Be 0
+        }
+        finally {
+            Remove-OllamaLauncherTestDirectory $dir
+        }
+    }
+
     It 'fails for an unknown repository' {
         $dir = New-OllamaLauncherTestDirectory
 

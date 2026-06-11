@@ -14,7 +14,7 @@ CLI tool for [Ollama](https://ollama.ai) on Windows.
   - **Fetch & Download**: Browse the top 100+ models from the [Ollama Library](https://ollama.com/library) directly within the CLI.
   - **Search / re-order Models**: Search or order models listed.
   - **Remove Models**: Easily delete installed models to free up space.
-- **Smart Caching**: Caches the online model list for 1 hour to speed up browsing.
+- **Smart Caching**: Caches the online model list for 24 hours to speed up browsing.
 - **Detailed Views**: Displays model size, parameter count, and descriptions in a clean table format.
 - **Auto-Setup**: Detects if Ollama is missing and offers to download the installer.
 

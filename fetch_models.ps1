@@ -93,6 +93,7 @@ function Initialize-ParentDirectory {
 function Write-CacheLines {
     param([string]$Path, [string[]]$Lines, [switch]$Append)
 
+    if ($null -eq $Lines) { $Lines = @() }
     Initialize-ParentDirectory $Path
     if ($Append) { [System.IO.File]::AppendAllLines($Path, $Lines) }
     elseif (Get-Command Write-AtomicTextFile -ErrorAction SilentlyContinue) {
@@ -109,7 +110,9 @@ if (-not $ConfigFile) {
 try {
     $repos = RepositoryConfig\Get-RepositoryConfig -ConfigFile $ConfigFile -DefaultConfigPath (Get-LauncherDefaultReposPath)
 } catch {
-    Write-Error ([string]$_.Exception.Message)
+    # Console.Error keeps the message on one line; Write-Error wraps it to the
+    # host width when stderr is redirected, which breaks callers matching on it.
+    [Console]::Error.WriteLine([string]$_.Exception.Message)
     exit 1
 }
 

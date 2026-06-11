@@ -14,6 +14,7 @@ $env:OLLAMA_LAUNCHER_APP_ROOT = $AppRoot
 
 $PathsModule = Join-Path $ScriptRoot 'OllamaLauncher\Paths.psm1'
 Import-Module $PathsModule -Force
+Import-Module (Join-Path $ScriptRoot 'OllamaLauncher\RepositoryConfig.psm1') -Force -DisableNameChecking
 
 function Initialize-Directory {
     param(
@@ -65,9 +66,7 @@ if (-not (Test-Path -LiteralPath $DefaultRepos)) {
 }
 
 $ReposConfig = Get-OllamaLauncherConfigPath 'repos.json'
-if (-not (Test-Path -LiteralPath $ReposConfig)) {
-    Copy-Item -LiteralPath $DefaultRepos -Destination $ReposConfig -Force
-}
+Initialize-RepoConfig -ConfigFile $ReposConfig -DefaultConfigPath $DefaultRepos
 
 $FetchScript = Resolve-LauncherHelper -Name 'fetch_models.ps1' -Required
 $ModelSelectorScript = Resolve-LauncherHelper -Name 'model_selector.ps1' -SourceRelativePath 'src\OllamaLauncher\Selectors\ModelSelector.ps1'

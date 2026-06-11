@@ -86,9 +86,11 @@ set "MODELS_SORTED=%CACHE_OLLAMA%\ollama-models-sorted-Ollama.txt"
 
 REM Configurable pagination settings
 set "ITEMS_PER_PAGE=50"
-set "MODELS_PER_FETCH=100"
 set "CACHE_EXPIRY_HOURS=24"
-set "OLLAMA_RUN_TIMEOUT_SECONDS=3600"
+
+REM Local model count (set by the legacy local prompt; keep defined for the
+REM selector flow so "if !count! equ 0" checks stay well-formed)
+set "count=0"
 
 REM Create APPDATA directory if it doesn't exist
 if not exist "%APPDATA_OLLAMA%" mkdir "%APPDATA_OLLAMA%"
@@ -174,10 +176,17 @@ if !errorlevel! neq 0 (
     set "OLLAMA_STARTED=1"
     
     echo Waiting for Ollama to be ready...
+    set "OLLAMA_WAIT_TRIES=0"
     :wait_ollama
     timeout /t 1 /nobreak >nul
     curl -s http://localhost:11434 >nul 2>&1
-    if !errorlevel! neq 0 goto wait_ollama
+    if !errorlevel! equ 0 goto wait_ollama_done
+    set /a OLLAMA_WAIT_TRIES+=1
+    if !OLLAMA_WAIT_TRIES! lss 60 goto wait_ollama
+    echo Error: Ollama server did not respond after 60 seconds.
+    pause
+    goto cleanup
+    :wait_ollama_done
     echo Ollama is ready.
 )
 
@@ -444,13 +453,6 @@ if /i "!confirm!"=="Y" (
 cls
 goto start
 
-:invalid
-echo.
-echo Invalid selection. Please enter a valid number or model name.
-echo.
-timeout /t 2 /nobreak >nul
-goto prompt
-
 :fetch_list
 REM Fetch online models from Ollama library
 REM Always fetch fresh models to ensure latest catalog (unless cache was just created)
@@ -475,8 +477,9 @@ if not exist "%MODELS_CACHE%" (
         goto start
     )
 ) else (
-    REM Check if cache is older than CACHE_EXPIRY_HOURS
-    powershell -NoProfile -Command "if ((Get-Date) - (Get-Item '%MODELS_CACHE%').LastWriteTime -gt (New-TimeSpan -Hours %CACHE_EXPIRY_HOURS%)) { exit 1 } else { exit 0 }"
+    REM Check if cache is older than CACHE_EXPIRY_HOURS via Cache.psm1
+    REM (exit 1 = expired; an import failure also exits 1 and forces a refetch)
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "Import-Module '%APP_ROOT%\src\OllamaLauncher\Cache.psm1' -DisableNameChecking; if (Test-CacheExpired -Path '%MODELS_CACHE%' -MaxAgeHours %CACHE_EXPIRY_HOURS%) { exit 1 } else { exit 0 }"
     
     if !errorlevel! neq 0 (
         echo.
@@ -511,7 +514,7 @@ REM Apply sort and load models
 call :apply_sort
 
 set "page=1"
-set "items_per_page=50"
+set "items_per_page=%ITEMS_PER_PAGE%"
 if not defined SEL_INDEX set "SEL_INDEX=1"
 
 :show_models_page
@@ -610,6 +613,7 @@ if /i "!sel_action!"=="CMD" (
     if /i "!sel_arg!"=="R" goto handle_refresh
     if /i "!sel_arg!"=="E" goto handle_repository
     if /i "!sel_arg!"=="F" goto handle_search
+    if /i "!sel_arg!"=="U" goto handle_run_model
     if /i "!sel_arg!"=="S" goto handle_sort_size
     if /i "!sel_arg!"=="B" goto handle_sort_best
     if /i "!sel_arg!"=="L" goto handle_context_length
@@ -1234,7 +1238,6 @@ set "refresh_confirm="
 set /p refresh_confirm="Are you sure you want to refresh? (Y/N): "
 if /i "!refresh_confirm!"=="y" (
     del "%MODELS_CACHE%"
-    set "reached_end="
     set "SEARCH_TERM="
     set "SEL_INDEX=1"
     goto fetch_list
@@ -1490,9 +1493,14 @@ if !errorlevel! equ 0 (
 exit /b
 
 :wait_ollama_ready_context
+set "CTX_WAIT_TRIES=0"
+:wait_ollama_ready_context_loop
 timeout /t 1 /nobreak >nul
 curl -s http://localhost:11434 >nul 2>&1
-if !errorlevel! neq 0 goto wait_ollama_ready_context
+if !errorlevel! equ 0 exit /b
+set /a CTX_WAIT_TRIES+=1
+if !CTX_WAIT_TRIES! lss 60 goto wait_ollama_ready_context_loop
+echo Warning: Ollama did not respond after 60 seconds; continuing.
 exit /b
 
 :create_fetch_script
@@ -1583,7 +1591,8 @@ for /f "usebackq tokens=1,2,3,4,5,6,7 delims=|" %%a in ("%REPOS_LIST%") do (
     set "repo_host[!repo_count!]=%%f"
     set "repo_hastags[!repo_count!]=%%g"
     REM Sentinel "(none)" represents an empty pullPrefix (avoids consecutive | collapse in for/f).
-    if /i "!repo_prefix[!repo_count!]!"=="(none)" set "repo_prefix[!repo_count!]="
+    REM Compare the raw token: !arr[!i!]! does not nest in batch.
+    if /i "%%d"=="(none)" set "repo_prefix[!repo_count!]="
 )
 
 echo.

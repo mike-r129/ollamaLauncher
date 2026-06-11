@@ -59,6 +59,19 @@ function Test-RepositoryConfig {
             throw "Repo '$($r.name)' baseUrl is not a valid URI: '$url'"
         }
 
+        if ($r.PSObject.Properties['pagination'] -and $r.pagination) {
+            $pag = $r.pagination
+            $pagType = ''
+            if ($pag.PSObject.Properties['type']) { $pagType = ([string]$pag.type).ToLower() }
+            if ($pagType -eq 'page' -or $pagType -eq 'offset') {
+                $pagParam = ''
+                if ($pag.PSObject.Properties['param']) { $pagParam = [string]$pag.param }
+                if (-not $pagParam) {
+                    throw "Repo '$($r.name)' pagination type '$pagType' requires a non-empty 'param' query name."
+                }
+            }
+        }
+
         if ($r.PSObject.Properties['items'] -and $r.items -and $r.items.PSObject.Properties['regex']) {
             if (([string]$r.items.regex).Length -gt $maxRegexLen) {
                 throw "Repo '$($r.name)' items.regex exceeds $maxRegexLen chars."

@@ -19,6 +19,16 @@ Describe 'repository modules' {
         { RepositoryConfig\Test-RepositoryConfig -Repos $repos -ConfigFile 'repos.default.json' } | Should Not Throw
     }
 
+    It 'rejects page/offset pagination configs without a param name' {
+        $bad = [PSCustomObject]@{
+            name = 'BadPagination'
+            baseUrl = 'https://example.test/api/models'
+            pagination = [PSCustomObject]@{ type = 'page'; start = 1 }
+        }
+
+        { RepositoryConfig\Test-RepositoryConfig -Repos @($bad) -ConfigFile 'repos.json' } | Should Throw
+    }
+
     It 'formats repository list lines with stable fields' {
         $repo = (RepositoryConfig\New-DefaultRepoConfig -DefaultConfigPath (Join-Path $RepoRoot 'config/repos.default.json') | Where-Object { $_.name -eq 'Ollama' } | Select-Object -First 1)
         $line = RepositoryConfig\ConvertTo-RepositoryListLine -Repo $repo
@@ -89,6 +99,35 @@ Describe 'config and cache helpers' {
             Cache\Write-AtomicTextFile -Path $path -Lines @('a', 'b')
             (Get-Content -Path $path -Raw).Trim() | Should Be "a`r`nb"
             (Cache\Test-CacheExpired -Path $path -MaxAgeHours 24) | Should Be $false
+        } finally {
+            Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'writes cache files without a UTF-8 BOM so batch for /f parsing stays intact' {
+        $dir = Join-Path ([System.IO.Path]::GetTempPath()) ('cache-' + [guid]::NewGuid().ToString('N'))
+        $path = Cache\Get-LauncherCacheFile -CacheDirectory $dir -Name 'repos_list.txt'
+        try {
+            Cache\Write-AtomicTextFile -Path $path -Lines @('Ollama|html|desc|(none)|500|ollama.com|1')
+            $bytes = [System.IO.File]::ReadAllBytes($path)
+            # EF BB BF prefix would corrupt the first token read by batch for /f
+            ($bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) | Should Be $false
+            $bytes[0] | Should Be ([byte][char]'O')
+        } finally {
+            Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'accepts null or empty line sets and writes an empty file' {
+        $dir = Join-Path ([System.IO.Path]::GetTempPath()) ('cache-' + [guid]::NewGuid().ToString('N'))
+        $emptyPath = Cache\Get-LauncherCacheFile -CacheDirectory $dir -Name 'empty.txt'
+        $nullPath = Cache\Get-LauncherCacheFile -CacheDirectory $dir -Name 'null.txt'
+        try {
+            { Cache\Write-AtomicTextFile -Path $emptyPath -Lines @() } | Should Not Throw
+            { Cache\Write-AtomicTextFile -Path $nullPath -Lines $null } | Should Not Throw
+            (Test-Path -LiteralPath $emptyPath) | Should Be $true
+            (Test-Path -LiteralPath $nullPath) | Should Be $true
+            (Get-Item -LiteralPath $emptyPath).Length | Should Be 0
         } finally {
             Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
         }
