@@ -30,25 +30,6 @@ function Invoke-OllamaPull {
     & ollama pull $ModelName
 }
 
-function Start-OllamaCommandProcess {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory=$true)]
-        [string[]]$ArgumentList,
-        [Parameter(Mandatory=$true)]
-        [string]$StandardOutputPath,
-        [Parameter(Mandatory=$true)]
-        [string]$StandardErrorPath
-    )
-
-    Start-Process -FilePath 'ollama' `
-        -ArgumentList $ArgumentList `
-        -NoNewWindow `
-        -PassThru `
-        -RedirectStandardOutput $StandardOutputPath `
-        -RedirectStandardError $StandardErrorPath
-}
-
 function Invoke-OllamaRun {
     [CmdletBinding()]
     param(
@@ -73,6 +54,5 @@ Export-ModuleMember -Function Test-OllamaCommand,
     Start-OllamaServer,
     Stop-OllamaProcess,
     Invoke-OllamaPull,
-    Start-OllamaCommandProcess,
     Invoke-OllamaRun,
     Remove-OllamaModel

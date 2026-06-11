@@ -100,7 +100,7 @@ Describe 'selector script parameter contracts' {
         },
         [PSCustomObject]@{
             File = 'ollama_wrapper.ps1'
-            Parameters = @('Command', 'ModelName', 'ContextLength', 'Pull', 'Run')
+            Parameters = @('ModelName', 'ContextLength', 'Pull', 'Run')
         }
     )
 
@@ -155,6 +155,10 @@ Describe 'batch launcher integration contract' {
         $legacyBatchText | Should Match 'TrustHost\.ps1'
     }
 
+    It 'routes cache expiry through Cache.psm1' {
+        $legacyBatchText | Should Match 'Test-CacheExpired'
+    }
+
     It 'uses LocalAppData cache root for generated launcher files' {
         $legacyBatchText | Should Match 'OLLAMA_LAUNCHER_CACHE_DIR'
         $legacyBatchText | Should Match 'MODELS_CACHE=%CACHE_OLLAMA%\\ollama-models-'
@@ -170,15 +174,19 @@ Describe 'batch launcher integration contract' {
 Describe 'ollama wrapper module integration' {
     $wrapperText = Get-RepoFileText 'ollama_wrapper.ps1'
 
-    It 'uses launcher cache paths for redirected command output' {
-        $wrapperText | Should Match 'Get-OllamaLauncherCacheDirectory'
-        $wrapperText | Should Match 'Get-LauncherCacheFile'
-        $wrapperText | Should Not Match '\$env:TEMP\\ollama_'
+    It 'delegates pull and run to OllamaCli with a direct ollama fallback' {
+        $wrapperText | Should Match 'OllamaCli\.psm1'
+        $wrapperText | Should Match 'Invoke-OllamaPull'
+        $wrapperText | Should Match 'Invoke-OllamaRun'
     }
 
-    It 'delegates process launch to OllamaCli when available' {
-        $wrapperText | Should Match 'OllamaCli\.psm1'
-        $wrapperText | Should Match 'Start-OllamaCommandProcess'
+    It 'streams ollama output directly instead of redirecting it to files' {
+        $wrapperText | Should Not Match 'Start-Process'
+        $wrapperText | Should Not Match 'RedirectStandardOutput'
+    }
+
+    It 'still honors the launcher context length contract' {
+        $wrapperText | Should Match 'OLLAMA_CONTEXT_LENGTH'
     }
 }
 

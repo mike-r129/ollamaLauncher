@@ -133,7 +133,8 @@ function Expand-RepoTemplate {
 
     $out = $Template
     foreach ($k in $Values.Keys) {
-        $out = $out -replace ('\{' + [regex]::Escape($k) + '\}'), [string]$Values[$k]
+        # Literal replace: field values may contain regex substitution tokens like $1.
+        $out = $out.Replace('{' + $k + '}', [string]$Values[$k])
     }
     return $out
 }

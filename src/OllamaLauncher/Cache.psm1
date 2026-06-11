@@ -28,9 +28,14 @@ function Write-AtomicTextFile {
         [Parameter(Mandatory=$true)]
         [string]$Path,
         [Parameter(Mandatory=$true)]
+        [AllowNull()]
+        [AllowEmptyCollection()]
         [string[]]$Lines,
-        [System.Text.Encoding]$Encoding = [System.Text.Encoding]::UTF8
+        # No BOM: these files are parsed raw by batch for /f loops.
+        [System.Text.Encoding]$Encoding = (New-Object System.Text.UTF8Encoding($false))
     )
+
+    if ($null -eq $Lines) { $Lines = @() }
 
     $dir = Split-Path -Parent $Path
     if ($dir -and -not (Test-Path -LiteralPath $dir)) {
