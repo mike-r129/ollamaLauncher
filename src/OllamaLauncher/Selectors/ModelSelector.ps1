@@ -77,9 +77,11 @@ $script:visibleRows = 0
 
 function Get-FitColor([string]$sizeStr) {
     $sizeGb = -1.0
-    if ($sizeStr -match '([\d\.]+)\s*GB') { $sizeGb = [double]$matches[1] }
+    # '< 1 GB' must be checked before the GB pattern, which would match the
+    # literal '1' and overstate the size.
+    if ($sizeStr -match '<\s*1') { $sizeGb = 0.5 }
+    elseif ($sizeStr -match '([\d\.]+)\s*GB') { $sizeGb = [double]$matches[1] }
     elseif ($sizeStr -match '([\d\.]+)\s*MB') { $sizeGb = [double]$matches[1] / 1024.0 }
-    elseif ($sizeStr -match '<\s*1') { $sizeGb = 0.5 }
 
     # Add context memory overhead (rough estimate: context_tokens / 50000 * model_size_gb)
     if ($sizeGb -gt 0) {
@@ -234,11 +236,15 @@ function Draw-Row($row, [bool]$isSelected) {
     }
 }
 
+function Get-SafeCursorTop {
+    try { return [Console]::CursorTop } catch { return -1 }
+}
+
 function Safe-SetCursor([int]$x, [int]$y) {
     try {
-        if ($y -lt 0) { $y = 0 }
+        if ($y -lt 0) { return $false }
         $maxY = [Console]::BufferHeight - 1
-        if ($y -gt $maxY) { $y = $maxY }
+        if ($y -gt $maxY) { return $false }
         [Console]::SetCursorPosition($x, $y)
         return $true
     } catch {
@@ -262,7 +268,8 @@ function Build-HelpLine {
 
 function Build-StatusLine {
     if ($script:pageSize -gt 0) {
-        return ("Selected: #{0} of {1} (page {2}/{3}) - arrows move, Enter pulls, Tab views tags, or type a number/name..." -f $script:SelIndex, $script:totalItems, $script:Page, $script:TotalPages)
+        $tagsHint = if ($HasTags -eq '1') { ', Tab views tags' } else { '' }
+        return ("Selected: #{0} of {1} (page {2}/{3}) - arrows move, Enter pulls{4}, or type a number/name..." -f $script:SelIndex, $script:totalItems, $script:Page, $script:TotalPages, $tagsHint)
     }
     return 'No models to display. Press a command key (R/E/F/X)...'
 }
@@ -283,7 +290,7 @@ function Render-Full {
     Write-PaddedLine ($headerFormat -f 'Num', 'Model Name', 'Size (GB)', 'Params', '# of Models', 'Description')
     Write-PaddedLine ($headerFormat -f ('-' * 4), ('-' * $script:nameWidth), ('-' * 10), ('-' * 8), ('-' * 11), ('-' * $script:descWidth))
 
-    $script:rowStartY = [Console]::CursorTop
+    $script:rowStartY = Get-SafeCursorTop
     if ($script:pageSize -eq 0) {
         Write-PaddedLine '  (no models on this page)'
     } else {
@@ -297,7 +304,7 @@ function Render-Full {
     Write-PaddedLine (Build-NavLine)
     Write-PaddedLine (Build-HelpLine)
     Write-PaddedLine ''
-    $script:statusY = [Console]::CursorTop
+    $script:statusY = Get-SafeCursorTop
     $status = Build-StatusLine
     try { $width = [Console]::BufferWidth - 1 } catch { $width = 79 }
     if ($width -lt 1) { $width = 1 }
@@ -306,6 +313,7 @@ function Render-Full {
 }
 
 function Redraw-Row([int]$localIndex) {
+    if ($script:rowStartY -lt 0) { return }
     if ($localIndex -lt $script:viewStart -or $localIndex -ge ($script:viewStart + $script:visibleRows)) { return }
     $y = $script:rowStartY + ($localIndex - $script:viewStart)
     if (-not (Safe-SetCursor 0 $y)) { return }
@@ -382,7 +390,7 @@ try {
             Set-PageState $script:Page $script:SelIndex
             Render-Full
         }
-        
+
         # Check if a key is available (non-blocking)
         if ([Console]::KeyAvailable) {
             $key = [Console]::ReadKey($true)
@@ -402,7 +410,7 @@ try {
             'Home'       { Jump-Selection $script:minIdx; break }
             'End'        { Jump-Selection $script:maxIdx; break }
             'Enter'      { if ($script:pageSize -gt 0) { Write-Result 'SELECT' $script:SelIndex; return }; break }
-            'Tab'        { if ($script:pageSize -gt 0) { Write-Result 'EXPAND' $script:SelIndex; return }; break }
+            'Tab'        { if ($HasTags -eq '1' -and $script:pageSize -gt 0) { Write-Result 'EXPAND' $script:SelIndex; return }; break }
             'Escape'     { Write-Result 'CMD' 'C'; return }
             default {
                 $char = $key.KeyChar

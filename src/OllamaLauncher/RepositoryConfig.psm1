@@ -135,7 +135,12 @@ function ConvertTo-RepositoryListLine {
     $hasTags = '0'
     if ($Repo.PSObject.Properties['tagFetch'] -and $Repo.tagFetch) { $hasTags = '1' }
     elseif ($fmt -eq 'html' -and $hostName -eq 'ollama.com')       { $hasTags = '1' }
-    if ([string]::IsNullOrEmpty([string]$pp)) { $pp = '(none)' }
+    # Batch for /f collapses consecutive '|' delimiters, which would shift
+    # every following field, so no field may ever be empty. The batch maps
+    # the '(none)' sentinel back to an empty value.
+    if ([string]::IsNullOrEmpty([string]$pp))   { $pp = '(none)' }
+    if ([string]::IsNullOrEmpty([string]$desc)) { $desc = '(none)' }
+    if ([string]::IsNullOrEmpty($hostName))     { $hostName = '(none)' }
     return "$($Repo.name)|$fmt|$desc|$pp|$dl|$hostName|$hasTags"
 }
 

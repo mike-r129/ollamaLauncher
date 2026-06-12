@@ -1,6 +1,6 @@
 @echo off
 REM ollamaLauncher.bat
-REM Version: 1.2 
+REM Version: 1.2
 REM Date: 11/25/2025
 REM Author: Mike
 REM ============================================================================
@@ -24,7 +24,7 @@ REM Requirements:
 REM   - Windows OS (Built and tested on Windows 10/11)
 REM   - PowerShell (for fetch_models.ps1 script)
 REM   - Internet connection (for fetching model list)
-REM   - Ollama installed and accessible via PATH, 
+REM   - Ollama installed and accessible via PATH,
 REM     - If Ollama is not installed CLI will download it using curl then the install file will need to be manually installed by the user.
 REM     - Once Ollama is installed re-launch the script ollamaLauncher.bat
 REM ============================================================================
@@ -110,23 +110,23 @@ call :load_repo_state
 call :load_context_length
 set "OLLAMA_CONTEXT_LENGTH=!CONTEXT_LENGTH!"
 
-echo              @@@            @@@              
-echo            @@@ @@          @@ @@@            
-echo            @@  @@@        @@@  @@            
-echo            @@   @@@@@@@@@@@@   @@            
-echo            @@   @@@      @@@   @@            
-echo            @@@@@@          @@@@@@            
-echo          @@@                    @@@          
-echo         @@@                      @@@         
-echo         @@                        @@         
-echo        @@@   @@@  @@@@@@@@  @@@   @@@        
-echo         @@    @  @        @  @    @@         
-echo          @@     @@   @@   @@     @@          
-echo         @@@     @@        @@     @@@     ____  ____                      __                           __             
+echo              @@@            @@@
+echo            @@@ @@          @@ @@@
+echo            @@  @@@        @@@  @@
+echo            @@   @@@@@@@@@@@@   @@
+echo            @@   @@@      @@@   @@
+echo            @@@@@@          @@@@@@
+echo          @@@                    @@@
+echo         @@@                      @@@
+echo         @@                        @@
+echo        @@@   @@@  @@@@@@@@  @@@   @@@
+echo         @@    @  @        @  @    @@
+echo          @@     @@   @@   @@     @@
+echo         @@@     @@        @@     @@@     ____  ____                      __                           __
 echo         @@        @@@@@@@@        @@    / __ \/ / /___ _____ ___  ____ _/ /   ____ ___  ______  _____/ /_  ___  _____
 echo         @@                        @@   / / / / / / __ `/ __ `__ \/ __ `/ /   / __ `/ / / / __ \/ ___/ __ \/ _ \/ ___/
-echo         @@                        @@  / /_/ / / / /_/ / / / / / / /_/ / /___/ /_/ / /_/ / / / / /__/ / / /  __/ /    
-echo         @@@                      @@@  \____/_/_/\__,_/_/ /_/ /_/\__,_/_____/\__,_/\__,_/_/ /_/\___/_/ /_/\___/_/ 
+echo         @@                        @@  / /_/ / / / /_/ / / / / / / /_/ / /___/ /_/ / /_/ / / / / /__/ / / /  __/ /
+echo         @@@                      @@@  \____/_/_/\__,_/_/ /_/ /_/\__,_/_____/\__,_/\__,_/_/ /_/\___/_/ /_/\___/_/
 echo                                                                                               v1.2 by Mike 11/25/2025
 REM Check if Ollama is installed and accessible
 where ollama >nul 2>nul
@@ -174,7 +174,7 @@ if !errorlevel! neq 0 (
     echo Starting Ollama server...
     start "" /B ollama serve >nul 2>&1
     set "OLLAMA_STARTED=1"
-    
+
     echo Waiting for Ollama to be ready...
     set "OLLAMA_WAIT_TRIES=0"
     :wait_ollama
@@ -377,13 +377,13 @@ if exist "%LOCALAPPDATA%\Programs\Ollama\Ollama app.exe" (
         set "OLLAMA_STARTED=0"
     )
     start "" "%LOCALAPPDATA%\Programs\Ollama\Ollama app.exe"
-    
+
     echo Waiting for Ollama window to appear...
     timeout /t 2 /nobreak >nul
-    
+
     REM Close the Ollama chat window but keep the tray icon running
     powershell -NoProfile -Command "$proc = Get-Process | Where-Object {$_.MainWindowTitle -eq 'Ollama'}; if($proc) { $proc.CloseMainWindow() }"
-    
+
     echo Ollama is now running in the system tray.
     timeout /t 1 /nobreak >nul
 ) else (
@@ -402,6 +402,22 @@ if exist "%LOCALAPPDATA%\Programs\Ollama\Ollama app.exe" (
 goto cleanup
 
 :remove_model
+REM Rebuild the numbered model list from the cache file the local selector
+REM writes. The model[] array is only populated by the legacy prompt flow,
+REM so without this, removal never matches a number in the selector flow.
+if exist "%LOCAL_MODELS_LIST%" (
+    set "count=0"
+    for /f "usebackq delims=" %%a in ("%LOCAL_MODELS_LIST%") do (
+        set /a count+=1
+        set "model[!count!]=%%a"
+    )
+)
+if !count! equ 0 (
+    echo.
+    echo No installed models to remove.
+    timeout /t 2 /nobreak >nul
+    goto start
+)
 echo.
 set /p remove_choice="Enter the number for the model to remove (or C to cancel): "
 
@@ -468,7 +484,7 @@ if not exist "%MODELS_CACHE%" (
     echo.
     echo Fetching latest !FETCH_LABEL! from !CURRENT_REPO!...
     powershell -ExecutionPolicy Bypass -File "%FETCH_MODELS_SCRIPT%" -CacheFile "%MODELS_CACHE%" -Repo "!CURRENT_REPO!" !FETCH_EXTRA_ARGS!
-    
+
     if not exist "%MODELS_CACHE%" (
         echo.
         echo Error: Failed to fetch models. models.txt was not created.
@@ -480,13 +496,13 @@ if not exist "%MODELS_CACHE%" (
     REM Check if cache is older than CACHE_EXPIRY_HOURS via Cache.psm1
     REM (exit 1 = expired; an import failure also exits 1 and forces a refetch)
     powershell -NoProfile -ExecutionPolicy Bypass -Command "Import-Module '%APP_ROOT%\src\OllamaLauncher\Cache.psm1' -DisableNameChecking; if (Test-CacheExpired -Path '%MODELS_CACHE%' -MaxAgeHours %CACHE_EXPIRY_HOURS%) { exit 1 } else { exit 0 }"
-    
+
     if !errorlevel! neq 0 (
         echo.
         echo Cache is older than %CACHE_EXPIRY_HOURS% hours. Refreshing !FETCH_LABEL! from !CURRENT_REPO!...
         REM Fetch to temporary file first to avoid losing old cache if fetch fails
         powershell -ExecutionPolicy Bypass -File "%FETCH_MODELS_SCRIPT%" -CacheFile "%MODELS_CACHE%.tmp" -Repo "!CURRENT_REPO!" !FETCH_EXTRA_ARGS!
-        
+
         if exist "%MODELS_CACHE%.tmp" (
             move /Y "%MODELS_CACHE%.tmp" "%MODELS_CACHE%" >nul
             echo Cache updated successfully.
@@ -707,7 +723,7 @@ if /i "!model_input!"=="c" (
 
 if "!model_input!"=="" (
     echo No model selected.
-    timeout /t 1 /nobreak
+    timeout /t 1 /nobreak >nul
     goto show_models_page
 )
 
@@ -1213,7 +1229,7 @@ if !page! lss !total_pages! (
 ) else (
     echo.
     echo Already on the last page of available models.
-    timeout /t 2 /nobreak
+    timeout /t 2 /nobreak >nul
     goto show_models_page
 )
 
@@ -1224,7 +1240,7 @@ if !page! gtr 1 (
     goto show_models_page
 ) else (
     echo Already on first page.
-    timeout /t 1 /nobreak
+    timeout /t 1 /nobreak >nul
     goto show_models_page
 )
 
@@ -1296,7 +1312,7 @@ if "!is_numeric!"=="true" (
             set "model_found=true"
         )
     )
-    
+
     if "!model_found!"=="false" (
         echo.
         echo Error: Model '!model_name!' not found in the available models list.
@@ -1590,9 +1606,11 @@ for /f "usebackq tokens=1,2,3,4,5,6,7 delims=|" %%a in ("%REPOS_LIST%") do (
     set "repo_prefix[!repo_count!]=%%d"
     set "repo_host[!repo_count!]=%%f"
     set "repo_hastags[!repo_count!]=%%g"
-    REM Sentinel "(none)" represents an empty pullPrefix (avoids consecutive | collapse in for/f).
+    REM Sentinel "(none)" represents an empty field (avoids consecutive | collapse in for/f).
     REM Compare the raw token: !arr[!i!]! does not nest in batch.
+    if /i "%%c"=="(none)" set "repo_desc[!repo_count!]="
     if /i "%%d"=="(none)" set "repo_prefix[!repo_count!]="
+    if /i "%%f"=="(none)" set "repo_host[!repo_count!]="
 )
 
 echo.
@@ -1605,7 +1623,8 @@ for /L %%i in (1,1,!repo_count!) do (
     set "marker= "
     if /i "!repo_name[%%i]!"=="!CURRENT_REPO!" set "marker=*"
     echo  !marker! %%i. !repo_name[%%i]!  [!repo_type[%%i]!]
-    echo        !repo_desc[%%i]!
+    REM echo( prints a blank line instead of "ECHO is off." for empty descriptions
+    echo(       !repo_desc[%%i]!
 )
 echo.
 set "repo_choice="
@@ -1747,8 +1766,9 @@ if exist "%REPOS_LIST%" (
             set "CURRENT_REPO_PREFIX=%%d"
             set "CURRENT_REPO_HOST=%%f"
             set "CURRENT_REPO_HASTAGS=%%g"
-            REM Sentinel "(none)" represents an empty pullPrefix (avoids consecutive | collapse in for/f).
+            REM Sentinel "(none)" represents an empty field (avoids consecutive | collapse in for/f).
             if /i "!CURRENT_REPO_PREFIX!"=="(none)" set "CURRENT_REPO_PREFIX="
+            if /i "!CURRENT_REPO_HOST!"=="(none)" set "CURRENT_REPO_HOST="
         )
     )
 )

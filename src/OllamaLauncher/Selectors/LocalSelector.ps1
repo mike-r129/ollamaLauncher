@@ -73,16 +73,23 @@ function Load-Models {
 # Model metadata and KV cache calculation
 # ----------------------------------------------------------------
 function Get-SizeGb([string]$sizeStr) {
+    # '< 1 GB' must be checked before the GB pattern, which would match the
+    # literal '1' and overstate the size.
+    if ($sizeStr -match '<\s*1')          { return 0.5 }
     if ($sizeStr -match '([\d\.]+)\s*GB') { return [double]$matches[1] }
     if ($sizeStr -match '([\d\.]+)\s*MB') { return [double]$matches[1] / 1024.0 }
-    if ($sizeStr -match '<\s*1')          { return 0.5 }
     return -1.0
 }
 
+# 'ollama show' spawns a subprocess; cache results so navigation and context
+# previews never re-query a model we already inspected this session.
+$script:metadataCache = @{}
+
 function Get-ModelMetadata([string]$modelName) {
+    if ($script:metadataCache.ContainsKey($modelName)) { return $script:metadataCache[$modelName] }
+    $meta = @{}
     try {
         $output = ollama show "$modelName" 2>$null | ForEach-Object { $_.Trim() }
-        $meta = @{}
         foreach ($line in $output) {
             if ($line -match '^\s*(\S+)\s+(.+)$') {
                 $key = $matches[1]
@@ -90,10 +97,11 @@ function Get-ModelMetadata([string]$modelName) {
                 $meta[$key] = $val
             }
         }
-        return $meta
     } catch {
-        return @{}
+        $meta = @{}
     }
+    $script:metadataCache[$modelName] = $meta
+    return $meta
 }
 
 function Calculate-KvCacheGb([hashtable]$metadata, [int]$contextTokens) {
@@ -154,13 +162,32 @@ function Limit-Text([string]$text, [int]$maxLen) {
     return ($text.Substring(0, $maxLen - 3) + '...')
 }
 
+function Get-SafeCursorTop {
+    try { return [Console]::CursorTop } catch { return -1 }
+}
+
+function Safe-SetCursor([int]$x, [int]$y) {
+    try {
+        if ($y -lt 0) { return $false }
+        $maxY = [Console]::BufferHeight - 1
+        if ($y -gt $maxY) { return $false }
+        [Console]::SetCursorPosition($x, $y)
+        return $true
+    } catch {
+        return $false
+    }
+}
+
 # ----------------------------------------------------------------
 # Layout state
 # ----------------------------------------------------------------
-$script:selIdx    = 0
-$script:nameWidth = 25
-$script:statusY   = 0
-$script:rowStartY = 0
+$script:selIdx     = 0
+$script:nameWidth  = 25
+$script:statusY    = -1
+$script:rowStartY  = -1
+$script:lastWidth  = 0
+$script:lastHeight = 0
+$script:rows       = @()
 
 function Update-NameWidth {
     try { $width = [Console]::BufferWidth - 1 } catch { $width = 79 }
@@ -168,13 +195,74 @@ function Update-NameWidth {
     $script:nameWidth = [Math]::Min(30, [Math]::Max(15, $width - 38))
 }
 
+function Console-SizeChanged {
+    try {
+        return ([Console]::WindowWidth -ne $script:lastWidth -or [Console]::WindowHeight -ne $script:lastHeight)
+    } catch {
+        return $false
+    }
+}
+
 # ----------------------------------------------------------------
 # Rendering
 # ----------------------------------------------------------------
-function Render-Full {
-    Update-NameWidth
+# Precompute per-row colour and fit label once per (models, context) change so
+# navigating never re-runs the memory estimate, let alone 'ollama show'.
+function Build-Rows {
+    $script:rows = @()
+    foreach ($m in $script:models) {
+        $color = Get-FitColor $m.Name $m.Size $script:contextLength
+        $fitLabel = switch ($color) {
+            'Green'  { 'Fits VRAM' }
+            'Yellow' { 'RAM needed' }
+            'Red'    { 'Too large' }
+            default  { 'Unknown' }
+        }
+        $script:rows += [pscustomobject]@{
+            Name   = $m.Name
+            Size   = $m.Size
+            Params = $m.Params
+            Color  = $color
+            Fit    = $fitLabel
+        }
+    }
+}
+
+function Draw-Row([int]$index, [bool]$isSelected) {
     try { $width = [Console]::BufferWidth - 1 } catch { $width = 79 }
     if ($width -lt 40) { $width = 40 }
+
+    $row      = $script:rows[$index]
+    $marker   = if ($isSelected) { '>' } else { ' ' }
+    $name     = Limit-Text $row.Name $script:nameWidth
+    $prefix   = "  $marker {0,3}. " -f ($index + 1)
+    $mainText = ('{0,-' + $script:nameWidth + '} {1,-12} {2,-8}') -f $name, $row.Size, $row.Params
+    $fitPart  = "  $($row.Fit)"
+
+    $fullLen = $prefix.Length + $mainText.Length + $fitPart.Length
+    $padding = ' ' * [Math]::Max(0, $width - $fullLen)
+
+    if ($isSelected) {
+        Write-Host $prefix    -NoNewline -ForegroundColor White -BackgroundColor DarkBlue
+        Write-Host $mainText  -NoNewline -ForegroundColor $row.Color -BackgroundColor DarkBlue
+        Write-Host ($fitPart + $padding) -ForegroundColor Gray -BackgroundColor DarkBlue
+    } else {
+        Write-Host $prefix    -NoNewline
+        Write-Host $mainText  -NoNewline -ForegroundColor $row.Color
+        Write-Host ($fitPart + $padding)
+    }
+}
+
+function Build-StatusLine {
+    if ($script:models.Count -gt 0) {
+        return ("Selected: #{0} of {1} - {2}" -f ($script:selIdx + 1), $script:models.Count, $script:models[$script:selIdx].Name)
+    }
+    return 'No local models installed. Use [U] or [0] to pull a model from the repository.'
+}
+
+function Render-Full {
+    Update-NameWidth
+    try { $script:lastWidth = [Console]::WindowWidth; $script:lastHeight = [Console]::WindowHeight } catch {}
 
     Clear-Host
     Write-PaddedLine ''
@@ -186,45 +274,13 @@ function Render-Full {
     Write-PaddedLine ($hFmt -f 'Num', 'Model Name', 'Size', 'Params', 'Fit')
     Write-PaddedLine ($hFmt -f ('-'*4), ('-'*$script:nameWidth), ('-'*12), ('-'*8), ('-'*14))
 
-    $script:rowStartY = [Console]::CursorTop
+    $script:rowStartY = Get-SafeCursorTop
 
-    if ($script:models.Count -eq 0) {
+    if ($script:rows.Count -eq 0) {
         Write-PaddedLine '  (no installed models - press U or 0 to pull a model)'
     } else {
-        for ($i = 0; $i -lt $script:models.Count; $i++) {
-            $m          = $script:models[$i]
-            $isSelected = ($i -eq $script:selIdx)
-            $marker     = if ($isSelected) { '>' } else { ' ' }
-            $num        = $i + 1
-            $name       = Limit-Text $m.Name $script:nameWidth
-            $color      = Get-FitColor $m.Name $m.Size $script:contextLength
-
-            # Build fit label
-            $sizeGb = Get-SizeGb $m.Size
-            $fitLabel = switch ($color) {
-                'Green'  { 'Fits VRAM' }
-                'Yellow' { 'RAM needed' }
-                'Red'    { 'Too large' }
-                default  { 'Unknown' }
-            }
-
-            $prefix   = "  $marker {0,3}. " -f $num
-            $mainText = ('{0,-' + $script:nameWidth + '} {1,-12} {2,-8}') -f $name, $m.Size, $m.Params
-            $fitPart  = "  $fitLabel"
-
-            $fullLen = $prefix.Length + $mainText.Length + $fitPart.Length
-            $pad     = [Math]::Max(0, $width - $fullLen)
-            $padding = ' ' * $pad
-
-            if ($isSelected) {
-                Write-Host $prefix    -NoNewline -ForegroundColor White -BackgroundColor DarkBlue
-                Write-Host $mainText  -NoNewline -ForegroundColor $color -BackgroundColor DarkBlue
-                Write-Host ($fitPart + $padding) -ForegroundColor Gray -BackgroundColor DarkBlue
-            } else {
-                Write-Host $prefix    -NoNewline
-                Write-Host $mainText  -NoNewline -ForegroundColor $color
-                Write-Host ($fitPart + $padding)
-            }
+        for ($i = 0; $i -lt $script:rows.Count; $i++) {
+            Draw-Row $i ($i -eq $script:selIdx)
         }
     }
 
@@ -233,17 +289,49 @@ function Render-Full {
     Write-PaddedLine '[Up/Down] Move   [Enter] Run selected model   or type a number and press Enter'
     Write-PaddedLine ''
 
-    $script:statusY = [Console]::CursorTop
-    $statusMsg = if ($script:models.Count -gt 0) {
-        "Selected: #{0} of {1} - {2}" -f ($script:selIdx + 1), $script:models.Count, $script:models[$script:selIdx].Name
-    } else {
-        'No local models installed. Use [U] or [0] to pull a model from the repository.'
-    }
+    $script:statusY = Get-SafeCursorTop
+    $statusMsg = Build-StatusLine
     try { $w = [Console]::BufferWidth - 1 } catch { $w = 79 }
     if ($w -lt 1) { $w = 1 }
     if ($statusMsg.Length -gt $w) { $statusMsg = $statusMsg.Substring(0, $w) }
     else { $statusMsg = $statusMsg + (' ' * ($w - $statusMsg.Length)) }
     Write-Host $statusMsg -NoNewline
+}
+
+function Redraw-Row([int]$index) {
+    if ($script:rowStartY -lt 0) { return $false }
+    if (-not (Safe-SetCursor 0 ($script:rowStartY + $index))) { return $false }
+    Draw-Row $index ($index -eq $script:selIdx)
+    return $true
+}
+
+function Redraw-Status {
+    if (-not (Safe-SetCursor 0 $script:statusY)) { return }
+    $statusMsg = Build-StatusLine
+    try { $w = [Console]::BufferWidth - 1 } catch { $w = 79 }
+    if ($w -lt 1) { $w = 1 }
+    if ($statusMsg.Length -gt $w) { $statusMsg = $statusMsg.Substring(0, $w) }
+    else { $statusMsg = $statusMsg + (' ' * ($w - $statusMsg.Length)) }
+    Write-Host $statusMsg -NoNewline
+}
+
+# Redraw only the rows that changed instead of clearing the screen, so
+# arrow-key navigation does not flicker.
+function Move-Selection([int]$delta) {
+    if ($script:models.Count -eq 0) { return }
+    $newIdx = $script:selIdx + $delta
+    if ($newIdx -lt 0) { $newIdx = $script:models.Count - 1 }
+    elseif ($newIdx -ge $script:models.Count) { $newIdx = 0 }
+    if ($newIdx -eq $script:selIdx) { return }
+
+    $oldIdx = $script:selIdx
+    $script:selIdx = $newIdx
+
+    if (-not (Redraw-Row $oldIdx) -or -not (Redraw-Row $newIdx)) {
+        Render-Full
+        return
+    }
+    Redraw-Status
 }
 
 # ----------------------------------------------------------------
@@ -266,45 +354,64 @@ function Show-ContextSelector {
         if ($contexts[$i].tokens -eq $script:contextLength) { $ci = $i; break }
     }
 
+    # Compute the KV cache delta per option once, up front (one cached
+    # 'ollama show' at most) instead of per option per keypress.
+    $notes = @()
+    $meta = $null
+    if ($script:models.Count -gt 0) { $meta = Get-ModelMetadata $script:models[0].Name }
+    $currentKv = if ($meta) { Calculate-KvCacheGb $meta $script:contextLength } else { 0.0 }
+    foreach ($ctx in $contexts) {
+        $note = ''
+        if ($meta) {
+            $kvDelta = (Calculate-KvCacheGb $meta $ctx.tokens) - $currentKv
+            if ($kvDelta -gt 0)     { $note = ' (+{0:N1} GB KV cache)' -f $kvDelta }
+            elseif ($kvDelta -lt 0) { $note = ' (-{0:N1} GB KV cache)' -f [Math]::Abs($kvDelta) }
+        }
+        $notes += $note
+    }
+
+    function Draw-ContextOption([int]$i, [bool]$isSelected) {
+        $ctx = $contexts[$i]
+        $line = "  {0}. {1,-5}  ({2,8:N0} tokens){3}" -f ($i + 1), $ctx.label, $ctx.tokens, $notes[$i]
+        if ($isSelected) {
+            Write-Host $line -BackgroundColor Cyan -ForegroundColor Black
+        } else {
+            Write-Host $line -ForegroundColor White
+        }
+    }
+
+    # Render the menu once; arrow keys repaint only the two affected rows.
+    Clear-Host
+    Write-Host ''
+    Write-Host '=============== Context Length Selection ===============' -ForegroundColor Cyan
+    Write-Host ("Current: {0:N0} tokens - higher context = more memory overhead" -f $script:contextLength) -ForegroundColor Yellow
+    Write-Host ''
+    Write-Host 'Choose context window size:' -ForegroundColor White
+    Write-Host ''
+    $optionStartY = Get-SafeCursorTop
+    for ($i = 0; $i -lt $contexts.Count; $i++) {
+        Draw-ContextOption $i ($i -eq $ci)
+    }
+    Write-Host ''
+    Write-Host '[Up/Down] Move   [Enter] Select   [1-7] Quick select   [Esc/C] Cancel' -ForegroundColor Gray
+    Write-Host ''
+
     $changed = $false
 
     while ($true) {
-        Clear-Host
-        Write-Host ''
-        Write-Host '=============== Context Length Selection ===============' -ForegroundColor Cyan
-        Write-Host ("Current: {0:N0} tokens - higher context = more memory overhead" -f $script:contextLength) -ForegroundColor Yellow
-        Write-Host ''
-        Write-Host 'Choose context window size:' -ForegroundColor White
-        Write-Host ''
-        for ($i = 0; $i -lt $contexts.Count; $i++) {
-            $ctx = $contexts[$i]
-            # Calculate accurate KV cache overhead using first installed model (if any)
-            $ovNote = ''
-            if ($script:models.Count -gt 0) {
-                $firstModel = $script:models[0]
-                $currentKv = Calculate-KvCacheGb (Get-ModelMetadata $firstModel.Name) $script:contextLength
-                $newKv = Calculate-KvCacheGb (Get-ModelMetadata $firstModel.Name) $ctx.tokens
-                $kvDelta = $newKv - $currentKv
-                if ($kvDelta -ne 0) {
-                    $ovNote = ' (+{0:N1} GB KV cache)' -f $kvDelta
-                }
-            }
-            if ($i -eq $ci) {
-                Write-Host ("  {0}. {1,-5}  ({2,8:N0} tokens){3}" -f ($i+1), $ctx.label, $ctx.tokens, $ovNote) -BackgroundColor Cyan -ForegroundColor Black
-            } else {
-                Write-Host ("  {0}. {1,-5}  ({2,8:N0} tokens){3}" -f ($i+1), $ctx.label, $ctx.tokens, $ovNote) -ForegroundColor White
-            }
-        }
-        Write-Host ''
-        Write-Host '[Up/Down] Move   [Enter] Select   [1-7] Quick select   [Esc/C] Cancel' -ForegroundColor Gray
-        Write-Host ''
-
         $k = [Console]::ReadKey($true)
 
-        if ($k.Key -eq [ConsoleKey]::UpArrow) {
-            $ci = if ($ci -gt 0) { $ci - 1 } else { $contexts.Count - 1 }
-        } elseif ($k.Key -eq [ConsoleKey]::DownArrow) {
-            $ci = if ($ci -lt $contexts.Count - 1) { $ci + 1 } else { 0 }
+        if ($k.Key -eq [ConsoleKey]::UpArrow -or $k.Key -eq [ConsoleKey]::DownArrow) {
+            $oldCi = $ci
+            if ($k.Key -eq [ConsoleKey]::UpArrow) {
+                $ci = if ($ci -gt 0) { $ci - 1 } else { $contexts.Count - 1 }
+            } else {
+                $ci = if ($ci -lt $contexts.Count - 1) { $ci + 1 } else { 0 }
+            }
+            if ($optionStartY -ge 0 -and (Safe-SetCursor 0 ($optionStartY + $oldCi))) {
+                Draw-ContextOption $oldCi $false
+                if (Safe-SetCursor 0 ($optionStartY + $ci)) { Draw-ContextOption $ci $true }
+            }
         } elseif ($k.Key -eq [ConsoleKey]::Enter) {
             $script:contextLength = $contexts[$ci].tokens
             $changed = $true
@@ -345,6 +452,7 @@ function Read-NumberInput([char]$seedChar) {
 # Main
 # ----------------------------------------------------------------
 Load-Models
+Build-Rows
 
 # Clamp selection to valid range after (re-)loading
 if ($script:models.Count -eq 0) {
@@ -359,6 +467,10 @@ try {
     Render-Full
 
     while ($true) {
+        if (Console-SizeChanged) {
+            Render-Full
+        }
+
         if (-not [Console]::KeyAvailable) {
             [System.Threading.Thread]::Sleep(50)
             continue
@@ -368,17 +480,11 @@ try {
 
         switch ($key.Key) {
             'UpArrow' {
-                if ($script:models.Count -gt 0) {
-                    $script:selIdx = if ($script:selIdx -gt 0) { $script:selIdx - 1 } else { $script:models.Count - 1 }
-                    Render-Full
-                }
+                Move-Selection -1
                 break
             }
             'DownArrow' {
-                if ($script:models.Count -gt 0) {
-                    $script:selIdx = if ($script:selIdx -lt $script:models.Count - 1) { $script:selIdx + 1 } else { 0 }
-                    Render-Full
-                }
+                Move-Selection 1
                 break
             }
             'Enter' {
@@ -403,7 +509,10 @@ try {
                         'L' { Write-Result 'CMD' 'L'; return }
                         'X' { Write-Result 'CMD' 'X'; return }
                         'C' {
-                            $changed = Show-ContextSelector
+                            if (Show-ContextSelector) {
+                                # Context changed: fit colours depend on it
+                                Build-Rows
+                            }
                             Render-Full
                             break
                         }

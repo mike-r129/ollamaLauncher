@@ -34,6 +34,36 @@ for ($i = 0; $i -lt $contexts.Count; $i++) {
     }
 }
 
+$script:optionStartY = -1
+
+function Get-SafeCursorTop {
+    try { return [Console]::CursorTop } catch { return -1 }
+}
+
+function Safe-SetCursor([int]$x, [int]$y) {
+    try {
+        if ($y -lt 0) { return $false }
+        $maxY = [Console]::BufferHeight - 1
+        if ($y -gt $maxY) { return $false }
+        [Console]::SetCursorPosition($x, $y)
+        return $true
+    } catch {
+        return $false
+    }
+}
+
+function Draw-Option([int]$i, [bool]$isSelected) {
+    $ctx = $contexts[$i]
+    $line = "  {0}. {1,-5} ({2:N0} tokens)" -f $ctx.number, $ctx.label, $ctx.tokens
+    if ($isSelected) {
+        Write-Host $line -BackgroundColor Cyan -ForegroundColor Black
+    } else {
+        Write-Host $line -ForegroundColor White
+    }
+}
+
+# Full render happens once; arrow keys repaint only the two affected rows so
+# navigation does not flicker.
 function Render {
     Clear-Host
     Write-Host ''
@@ -43,13 +73,9 @@ function Render {
     Write-Host 'Select context length (affects model usability estimates):' -ForegroundColor White
     Write-Host ''
 
+    $script:optionStartY = Get-SafeCursorTop
     for ($i = 0; $i -lt $contexts.Count; $i++) {
-        $ctx = $contexts[$i]
-        if ($i -eq $selectedIdx) {
-            Write-Host ("  {0}. {1,-5} ({2:N0} tokens)" -f $ctx.number, $ctx.label, $ctx.tokens) -BackgroundColor Cyan -ForegroundColor Black
-        } else {
-            Write-Host ("  {0}. {1,-5} ({2:N0} tokens)" -f $ctx.number, $ctx.label, $ctx.tokens) -ForegroundColor White
-        }
+        Draw-Option $i ($i -eq $selectedIdx)
     }
 
     Write-Host ''
@@ -57,20 +83,33 @@ function Render {
     Write-Host ''
 }
 
+function Move-Selection([int]$newIdx) {
+    $oldIdx = $script:selectedIdx
+    if ($newIdx -eq $oldIdx) { return }
+    $script:selectedIdx = $newIdx
+
+    if ($script:optionStartY -ge 0 -and (Safe-SetCursor 0 ($script:optionStartY + $oldIdx))) {
+        Draw-Option $oldIdx $false
+        if (Safe-SetCursor 0 ($script:optionStartY + $newIdx)) {
+            Draw-Option $newIdx $true
+            return
+        }
+    }
+    Render
+}
+
 try {
-    [Console]::CursorVisible = $false
+    try { [Console]::CursorVisible = $false } catch {}
     Render
 
     while ($true) {
         $key = [System.Console]::ReadKey($true)
 
         if ($key.Key -eq [System.ConsoleKey]::UpArrow) {
-            $selectedIdx = if ($selectedIdx -gt 0) { $selectedIdx - 1 } else { $contexts.Count - 1 }
-            Render
+            Move-Selection $(if ($selectedIdx -gt 0) { $selectedIdx - 1 } else { $contexts.Count - 1 })
         }
         elseif ($key.Key -eq [System.ConsoleKey]::DownArrow) {
-            $selectedIdx = if ($selectedIdx -lt $contexts.Count - 1) { $selectedIdx + 1 } else { 0 }
-            Render
+            Move-Selection $(if ($selectedIdx -lt $contexts.Count - 1) { $selectedIdx + 1 } else { 0 })
         }
         elseif ($key.Key -eq [System.ConsoleKey]::Enter) {
             $selected = $contexts[$selectedIdx]
